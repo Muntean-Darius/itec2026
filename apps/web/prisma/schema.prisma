@@ -1,0 +1,19 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  name      String
+  language  String   @default("Python")
+  ownerId   String
+  joinCode  String   @unique @default(cuid())
+  createdAt DateTime @default(now())
+
+  @@map("sessions")
+}
