@@ -3,6 +3,7 @@ import type { Session } from "@/types"
 interface SessionCardProps {
   session: Session
   langColor: string
+  onOpen: () => void
 }
 
 function timeAgo(iso: string) {
@@ -13,9 +14,10 @@ function timeAgo(iso: string) {
   return `${Math.floor(h / 24)}d ago`
 }
 
-export function SessionCard({ session, langColor }: SessionCardProps) {
+export function SessionCard({ session, langColor, onOpen }: SessionCardProps) {
   return (
     <div
+      onClick={onOpen}
       className="group relative flex flex-col gap-3 p-4 rounded-[10px] cursor-pointer transition-all duration-150"
       style={{
         background: "var(--panel)",
@@ -29,8 +31,8 @@ export function SessionCard({ session, langColor }: SessionCardProps) {
         <span className="font-ui font-semibold text-sm text-foreground truncate">
           {session.name}
         </span>
-        {/* Open button — visible on hover */}
         <button
+          onClick={e => { e.stopPropagation(); onOpen() }}
           className="hidden group-hover:flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold shrink-0 transition-all"
           style={{
             background: "rgba(0,217,192,0.12)",

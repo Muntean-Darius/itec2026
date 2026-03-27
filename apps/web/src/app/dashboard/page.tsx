@@ -1,29 +1,81 @@
 "use client"
 
-import { useState } from "react"
-import { Plus, Hash, X } from "lucide-react"
+import { useState, useTransition, useEffect, useCallback } from "react"
+import { useRouter } from "next/navigation"
+import { Plus, Hash, X, Loader2 } from "lucide-react"
 import { SessionCard } from "@/components/dashboard/SessionCard"
+import { createSession, joinSession, listSessions } from "@/actions/sessions"
+import { supabase } from "@/lib/supabase"
 import type { Session } from "@/types"
 
 const LANGUAGES = ["Python", "JavaScript", "TypeScript", "Go", "Rust", "C++", "Java"]
 
 const LANG_COLORS: Record<string, string> = {
-  Python: "#3B82F6",
+  Python:     "#3B82F6",
   JavaScript: "#FCD34D",
   TypeScript: "#60A5FA",
-  Go: "#4ADE80",
-  Rust: "#FB923C",
-  "C++": "#A78BFA",
-  Java: "#F87171",
+  Go:         "#4ADE80",
+  Rust:       "#FB923C",
+  "C++":      "#A78BFA",
+  Java:       "#F87171",
 }
 
 export default function DashboardPage() {
-  const [sessions] = useState<Session[]>([])
+  const router = useRouter()
+  const [sessions, setSessions] = useState<Session[]>([])
+  const [loading, setLoading] = useState(true)
   const [showNew, setShowNew] = useState(false)
   const [showJoin, setShowJoin] = useState(false)
   const [newName, setNewName] = useState("")
   const [newLang, setNewLang] = useState("Python")
   const [joinCode, setJoinCode] = useState("")
+  const [error, setError] = useState<string | null>(null)
+  const [isPending, startTransition] = useTransition()
+
+  const loadSessions = useCallback(async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+      const data = await listSessions(user.id)
+      setSessions(data)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { loadSessions() }, [loadSessions])
+
+  function handleCreate() {
+    if (!newName.trim()) return
+    setError(null)
+    startTransition(async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) { setError("Not signed in"); return }
+        const session = await createSession(newName.trim(), newLang, user.id)
+        setShowNew(false)
+        setNewName("")
+        router.push(`/session/${session.id}`)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to create session")
+      }
+    })
+  }
+
+  function handleJoin() {
+    if (!joinCode.trim()) return
+    setError(null)
+    startTransition(async () => {
+      try {
+        const session = await joinSession(joinCode.trim())
+        setShowJoin(false)
+        setJoinCode("")
+        router.push(`/session/${session.id}`)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Session not found")
+      }
+    })
+  }
 
   return (
     <div className="flex flex-col flex-1 p-8">
@@ -35,14 +87,14 @@ export default function DashboardPage() {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setShowJoin(true)}
+            onClick={() => { setError(null); setShowJoin(true) }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs text-text-sec border border-border-strong bg-elevated hover:border-[rgba(0,217,192,0.4)] hover:text-accent transition-all"
           >
             <Hash className="size-3.5" />
             Join Session
           </button>
           <button
-            onClick={() => setShowNew(true)}
+            onClick={() => { setError(null); setShowNew(true) }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold transition-all"
             style={{
               background: "linear-gradient(135deg, rgba(0,217,192,0.2), rgba(0,217,192,0.1))",
@@ -59,10 +111,19 @@ export default function DashboardPage() {
       </div>
 
       {/* Session grid */}
-      {sessions.length > 0 ? (
+      {loading ? (
+        <div className="flex flex-1 items-center justify-center">
+          <Loader2 className="size-4 animate-spin text-text-dim" />
+        </div>
+      ) : sessions.length > 0 ? (
         <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}>
           {sessions.map(s => (
-            <SessionCard key={s.id} session={s} langColor={LANG_COLORS[s.language] ?? "#8B949E"} />
+            <SessionCard
+              key={s.id}
+              session={s}
+              langColor={LANG_COLORS[s.language] ?? "#8B949E"}
+              onOpen={() => router.push(`/session/${s.id}`)}
+            />
           ))}
         </div>
       ) : (
@@ -83,7 +144,7 @@ export default function DashboardPage() {
           >
             <div className="flex items-center justify-between px-4 py-3 border-b border-border">
               <span className="font-ui font-bold text-sm text-foreground">New Session</span>
-              <button onClick={() => setShowNew(false)} className="text-text-dim hover:text-text-sec transition-colors">
+              <button onClick={() => setShowNew(false)} disabled={isPending} className="text-text-dim hover:text-text-sec transition-colors">
                 <X className="size-4" />
               </button>
             </div>
@@ -95,11 +156,13 @@ export default function DashboardPage() {
                   placeholder="my-project"
                   value={newName}
                   onChange={e => setNewName(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && handleCreate()}
                   className="w-full h-8 px-2.5 rounded text-sm text-foreground placeholder:text-text-dim outline-none transition-colors"
                   style={{ background: "var(--panel)", border: "1px solid var(--border-strong)" }}
                   onFocus={e => (e.currentTarget.style.borderColor = "var(--accent)")}
                   onBlur={e => (e.currentTarget.style.borderColor = "var(--border-strong)")}
                   autoFocus
+                  disabled={isPending}
                 />
               </div>
               <div className="space-y-1.5">
@@ -109,6 +172,7 @@ export default function DashboardPage() {
                     <button
                       key={lang}
                       onClick={() => setNewLang(lang)}
+                      disabled={isPending}
                       className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs transition-all"
                       style={{
                         background: newLang === lang ? "rgba(0,217,192,0.12)" : "var(--panel)",
@@ -122,17 +186,19 @@ export default function DashboardPage() {
                   ))}
                 </div>
               </div>
+              {error && <p className="text-xs" style={{ color: "var(--red)" }}>{error}</p>}
             </div>
             <div className="flex justify-end gap-2 px-4 py-3 border-t border-border">
               <button
                 onClick={() => setShowNew(false)}
-                className="px-3 py-1.5 rounded text-xs text-text-sec hover:text-foreground transition-colors"
+                disabled={isPending}
+                className="px-3 py-1.5 rounded text-xs text-text-sec hover:text-foreground transition-colors disabled:opacity-40"
               >
                 Cancel
               </button>
               <button
-                onClick={() => setShowNew(false)}
-                disabled={!newName.trim()}
+                onClick={handleCreate}
+                disabled={!newName.trim() || isPending}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold disabled:opacity-40 transition-all"
                 style={{
                   background: "linear-gradient(135deg, rgba(0,217,192,0.2), rgba(0,217,192,0.1))",
@@ -140,7 +206,8 @@ export default function DashboardPage() {
                   color: "var(--accent)",
                 }}
               >
-                Create Session
+                {isPending && <Loader2 className="size-3 animate-spin" />}
+                {isPending ? "Creating…" : "Create Session"}
               </button>
             </div>
           </div>
@@ -156,7 +223,7 @@ export default function DashboardPage() {
           >
             <div className="flex items-center justify-between px-4 py-3 border-b border-border">
               <span className="font-ui font-bold text-sm text-foreground">Join Session</span>
-              <button onClick={() => setShowJoin(false)} className="text-text-dim hover:text-text-sec transition-colors">
+              <button onClick={() => setShowJoin(false)} disabled={isPending} className="text-text-dim hover:text-text-sec transition-colors">
                 <X className="size-4" />
               </button>
             </div>
@@ -167,31 +234,36 @@ export default function DashboardPage() {
                 placeholder="Enter invite code"
                 value={joinCode}
                 onChange={e => setJoinCode(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && handleJoin()}
                 className="w-full h-8 px-2.5 rounded text-sm text-foreground placeholder:text-text-dim outline-none font-mono transition-colors"
                 style={{ background: "var(--panel)", border: "1px solid var(--border-strong)" }}
                 onFocus={e => (e.currentTarget.style.borderColor = "var(--accent)")}
                 onBlur={e => (e.currentTarget.style.borderColor = "var(--border-strong)")}
                 autoFocus
+                disabled={isPending}
               />
+              {error && <p className="text-xs mt-1.5" style={{ color: "var(--red)" }}>{error}</p>}
             </div>
             <div className="flex justify-end gap-2 px-4 py-3 border-t border-border">
               <button
                 onClick={() => setShowJoin(false)}
-                className="px-3 py-1.5 rounded text-xs text-text-sec hover:text-foreground transition-colors"
+                disabled={isPending}
+                className="px-3 py-1.5 rounded text-xs text-text-sec hover:text-foreground transition-colors disabled:opacity-40"
               >
                 Cancel
               </button>
               <button
-                onClick={() => setShowJoin(false)}
-                disabled={!joinCode.trim()}
-                className="px-3 py-1.5 rounded text-xs font-semibold disabled:opacity-40 transition-all"
+                onClick={handleJoin}
+                disabled={!joinCode.trim() || isPending}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold disabled:opacity-40 transition-all"
                 style={{
                   background: "linear-gradient(135deg, rgba(0,217,192,0.2), rgba(0,217,192,0.1))",
                   border: "1px solid rgba(0,217,192,0.4)",
                   color: "var(--accent)",
                 }}
               >
-                Join
+                {isPending && <Loader2 className="size-3 animate-spin" />}
+                {isPending ? "Joining…" : "Join"}
               </button>
             </div>
           </div>
