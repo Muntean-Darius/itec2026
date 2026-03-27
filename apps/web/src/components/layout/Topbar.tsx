@@ -16,7 +16,7 @@ export function Topbar({ breadcrumb, userInitials = "?" }: TopbarProps) {
     >
       {/* Logo */}
       <span className="font-ui font-extrabold text-[17px] tracking-tight text-foreground whitespace-nowrap mr-1">
-        i<span style={{ color: "var(--accent)", textShadow: "0 0 12px var(--accent-glow), 0 0 24px rgba(0,217,192,0.2)" }}>TEC</span>ify
+        i<span style={{ color: "var(--accent)", textShadow: "0 0 12px var(--accent-glow), 0 0 24px rgba(79,134,247,0.2)" }}>TEC</span>ify
       </span>
 
       {breadcrumb && breadcrumb.length > 0 && (
@@ -50,7 +50,7 @@ export function Topbar({ breadcrumb, userInitials = "?" }: TopbarProps) {
       {/* User avatar */}
       <div
         className="size-7 rounded-full flex items-center justify-center font-ui font-bold text-[10px] ml-1 shrink-0"
-        style={{ background: "linear-gradient(135deg, #00D9C0, #00a896)", color: "#0a1a18" }}
+        style={{ background: "linear-gradient(135deg, #4F86F7, #2C5ECC)", color: "#050D1F" }}
       >
         {userInitials}
       </div>

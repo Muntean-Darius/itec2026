@@ -13,7 +13,7 @@ export default function RegisterPage() {
         {/* Logo */}
         <div className="mb-8">
           <span className="font-ui font-extrabold text-[28px] tracking-tight text-foreground">
-            i<span style={{ color: "var(--accent)", textShadow: "0 0 12px var(--accent-glow), 0 0 24px rgba(0,217,192,0.2)" }}>TEC</span>ify
+            i<span style={{ color: "var(--accent)", textShadow: "0 0 12px var(--accent-glow), 0 0 24px rgba(79,134,247,0.2)" }}>TEC</span>ify
           </span>
         </div>
 
@@ -77,18 +77,18 @@ export default function RegisterPage() {
               />
             </div>
 
-            {state?.error && <p className="text-xs" style={{ color: "var(--red, #F87171)" }}>{state.error}</p>}
+            {state?.error && <p className="text-xs" style={{ color: "var(--red)" }}>{state.error}</p>}
 
             <button
               type="submit"
               disabled={pending}
               className="w-full flex items-center justify-center h-9 rounded-full text-xs font-semibold font-ui disabled:opacity-50 transition-all mt-1"
               style={{
-                background: "linear-gradient(135deg, rgba(0,217,192,0.2), rgba(0,217,192,0.1))",
-                border: "1px solid rgba(0,217,192,0.4)",
+                background: "linear-gradient(135deg, rgba(79,134,247,0.22), rgba(79,134,247,0.1))",
+                border: "1px solid rgba(79,134,247,0.4)",
                 color: "var(--accent)",
               }}
-              onMouseEnter={e => !pending && (e.currentTarget.style.boxShadow = "0 0 16px var(--accent-glow)")}
+              onMouseEnter={e => !pending && (e.currentTarget.style.boxShadow = "0 0 18px var(--accent-glow)")}
               onMouseLeave={e => (e.currentTarget.style.boxShadow = "none")}
             >
               {pending ? "Creating account…" : "Create account"}
