@@ -1,32 +1,11 @@
 "use client"
 
 import Link from "next/link"
-import { useState } from "react"
-import { useRouter } from "next/navigation"
-import { supabase } from "@/lib/supabase"
+import { useActionState } from "react"
+import { signIn } from "@/actions/auth"
 
 export default function LoginPage() {
-  const router = useRouter()
-  const [email, setEmail] = useState("")
-  const [password, setPassword] = useState("")
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    setLoading(true)
-    setError(null)
-
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-
-    if (error) {
-      setError(error.message)
-      setLoading(false)
-    } else {
-      router.push("/dashboard")
-      router.refresh()
-    }
-  }
+  const [state, action, pending] = useActionState(signIn, null)
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
@@ -40,7 +19,7 @@ export default function LoginPage() {
 
         {/* Card */}
         <div
-          className="rounded-[10px] overflow-hidden"
+          className="rounded-2xl overflow-hidden"
           style={{ background: "var(--panel)", border: "1px solid var(--border)" }}
         >
           <div className="p-6 pb-0">
@@ -48,18 +27,17 @@ export default function LoginPage() {
             <p className="mt-1 text-xs text-text-sec">Welcome back. Enter your credentials to continue.</p>
           </div>
 
-          <form onSubmit={handleSubmit} className="p-6 space-y-3.5">
+          <form action={action} className="p-6 space-y-3.5">
             <div className="space-y-1.5">
               <label htmlFor="email" className="text-xs font-medium text-text-sec">Email</label>
               <input
                 id="email"
+                name="email"
                 type="email"
                 placeholder="you@example.com"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
                 required
                 autoComplete="email"
-                className="w-full h-8 px-2.5 rounded text-sm text-foreground placeholder:text-text-dim outline-none transition-colors"
+                className="w-full h-9 px-3 rounded-xl text-sm text-foreground placeholder:text-text-dim outline-none transition-colors"
                 style={{ background: "var(--elevated)", border: "1px solid var(--border-strong)" }}
                 onFocus={e => (e.currentTarget.style.borderColor = "var(--accent)")}
                 onBlur={e => (e.currentTarget.style.borderColor = "var(--border-strong)")}
@@ -70,34 +48,33 @@ export default function LoginPage() {
               <label htmlFor="password" className="text-xs font-medium text-text-sec">Password</label>
               <input
                 id="password"
+                name="password"
                 type="password"
                 placeholder="••••••••"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
                 required
                 autoComplete="current-password"
-                className="w-full h-8 px-2.5 rounded text-sm text-foreground placeholder:text-text-dim outline-none transition-colors"
+                className="w-full h-9 px-3 rounded-xl text-sm text-foreground placeholder:text-text-dim outline-none transition-colors"
                 style={{ background: "var(--elevated)", border: "1px solid var(--border-strong)" }}
                 onFocus={e => (e.currentTarget.style.borderColor = "var(--accent)")}
                 onBlur={e => (e.currentTarget.style.borderColor = "var(--border-strong)")}
               />
             </div>
 
-            {error && <p className="text-xs text-red">{error}</p>}
+            {state?.error && <p className="text-xs" style={{ color: "var(--red, #F87171)" }}>{state.error}</p>}
 
             <button
               type="submit"
-              disabled={loading}
-              className="w-full flex items-center justify-center h-8 rounded text-xs font-semibold font-ui disabled:opacity-50 transition-all mt-1"
+              disabled={pending}
+              className="w-full flex items-center justify-center h-9 rounded-full text-xs font-semibold font-ui disabled:opacity-50 transition-all mt-1"
               style={{
                 background: "linear-gradient(135deg, rgba(0,217,192,0.2), rgba(0,217,192,0.1))",
                 border: "1px solid rgba(0,217,192,0.4)",
                 color: "var(--accent)",
               }}
-              onMouseEnter={e => !loading && (e.currentTarget.style.boxShadow = "0 0 16px var(--accent-glow)")}
+              onMouseEnter={e => !pending && (e.currentTarget.style.boxShadow = "0 0 16px var(--accent-glow)")}
               onMouseLeave={e => (e.currentTarget.style.boxShadow = "none")}
             >
-              {loading ? "Signing in…" : "Sign in"}
+              {pending ? "Signing in…" : "Sign in"}
             </button>
           </form>
         </div>

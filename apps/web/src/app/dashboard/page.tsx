@@ -1,9 +1,7 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
+import { useState } from "react"
 import { Plus, Hash, X } from "lucide-react"
-import { supabase } from "@/lib/supabase"
 import { SessionCard } from "@/components/dashboard/SessionCard"
 import type { Session } from "@/types"
 
@@ -20,25 +18,12 @@ const LANG_COLORS: Record<string, string> = {
 }
 
 export default function DashboardPage() {
-  const router = useRouter()
-  const [ready, setReady] = useState(false)
   const [sessions] = useState<Session[]>([])
   const [showNew, setShowNew] = useState(false)
   const [showJoin, setShowJoin] = useState(false)
   const [newName, setNewName] = useState("")
   const [newLang, setNewLang] = useState("Python")
   const [joinCode, setJoinCode] = useState("")
-
-  useEffect(() => {
-    // TODO: re-enable once Supabase is configured
-    // supabase.auth.getSession().then(({ data: { session } }) => {
-    //   if (!session) router.replace("/login")
-    //   else setReady(true)
-    // })
-    setReady(true)
-  }, [router])
-
-  if (!ready) return null
 
   return (
     <div className="flex flex-col flex-1 p-8">

@@ -1,8 +1,7 @@
 "use client"
 
-import { useRouter } from "next/navigation"
 import { LogOut } from "lucide-react"
-import { supabase } from "@/lib/supabase"
+import { signOut } from "@/actions/auth"
 
 interface TopbarProps {
   breadcrumb?: string[]
@@ -10,22 +9,13 @@ interface TopbarProps {
 }
 
 export function Topbar({ breadcrumb, userInitials = "?" }: TopbarProps) {
-  const router = useRouter()
-
-  async function handleSignOut() {
-    await supabase.auth.signOut()
-    router.push("/login")
-  }
-
   return (
     <header
       className="flex items-center gap-1.5 px-3.5 border-b border-border bg-panel shrink-0"
       style={{ height: 48 }}
     >
       {/* Logo */}
-      <span
-        className="font-ui font-extrabold text-[17px] tracking-tight text-foreground whitespace-nowrap mr-1"
-      >
+      <span className="font-ui font-extrabold text-[17px] tracking-tight text-foreground whitespace-nowrap mr-1">
         i<span style={{ color: "var(--accent)", textShadow: "0 0 12px var(--accent-glow), 0 0 24px rgba(0,217,192,0.2)" }}>TEC</span>ify
       </span>
 
@@ -47,14 +37,17 @@ export function Topbar({ breadcrumb, userInitials = "?" }: TopbarProps) {
 
       <div className="flex-1" />
 
-      {/* User avatar + sign out */}
-      <button
-        onClick={handleSignOut}
-        className="flex items-center gap-2 text-xs text-text-sec hover:text-foreground transition-colors"
-      >
-        <LogOut className="size-3.5" />
-      </button>
+      {/* Sign out */}
+      <form action={signOut}>
+        <button
+          type="submit"
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs text-text-sec border border-transparent hover:border-border-strong hover:text-foreground transition-all"
+        >
+          <LogOut className="size-3.5" />
+        </button>
+      </form>
 
+      {/* User avatar */}
       <div
         className="size-7 rounded-full flex items-center justify-center font-ui font-bold text-[10px] ml-1 shrink-0"
         style={{ background: "linear-gradient(135deg, #00D9C0, #00a896)", color: "#0a1a18" }}
