@@ -1,26 +1,127 @@
 @import "tailwindcss";
+@import "tw-animate-css";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ── CSS Custom Properties ───────────────────────────────────────────────── */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Backgrounds */
+  --background:   #0E1117;
+  --panel:        #161B22;
+  --elevated:     #1C2333;
+  --terminal-bg:  #0A0D12;
+  --ai-block:     #1a2438;
+  --hover:        #1f2937;
+
+  /* Text */
+  --foreground:   #E6EDF3;
+  --text-sec:     #8B949E;
+  --text-dim:     #484F58;
+
+  /* Accent — teal */
+  --accent:       #00D9C0;
+  --accent-dim:   rgba(0, 217, 192, 0.15);
+  --accent-glow:  rgba(0, 217, 192, 0.4);
+
+  /* Status palette */
+  --purple:       #A78BFA;
+  --orange:       #FB923C;
+  --blue:         #60A5FA;
+  --green:        #4ADE80;
+  --amber:        #FCD34D;
+  --red:          #F87171;
+
+  /* Borders */
+  --border:        rgba(255, 255, 255, 0.06);
+  --border-strong: rgba(255, 255, 255, 0.10);
+
+  /* shadcn component aliases */
+  --card:                var(--panel);
+  --card-foreground:     var(--foreground);
+  --popover:             var(--elevated);
+  --popover-foreground:  var(--foreground);
+  --primary:             var(--accent);
+  --primary-foreground:  #0a1a18;
+  --secondary:           var(--elevated);
+  --secondary-foreground: var(--foreground);
+  --muted:               var(--elevated);
+  --muted-foreground:    var(--text-sec);
+  --destructive:         var(--red);
+  --destructive-foreground: #fff;
+  --input:               var(--elevated);
+  --ring:                var(--accent);
+  --radius:              6px;
 }
 
+/* ── Tailwind v4 theme tokens ────────────────────────────────────────────── */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  /* Backgrounds */
+  --color-background:   var(--background);
+  --color-panel:        var(--panel);
+  --color-elevated:     var(--elevated);
+  --color-terminal-bg:  var(--terminal-bg);
+  --color-hover:        var(--hover);
+
+  /* Text */
+  --color-foreground:   var(--foreground);
+  --color-text-sec:     var(--text-sec);
+  --color-text-dim:     var(--text-dim);
+
+  /* Accent */
+  --color-accent:       var(--accent);
+  --color-accent-foreground: #0a1a18;
+
+  /* Status */
+  --color-purple:       var(--purple);
+  --color-orange:       var(--orange);
+  --color-blue:         var(--blue);
+  --color-green:        var(--green);
+  --color-amber:        var(--amber);
+  --color-red:          var(--red);
+
+  /* Borders */
+  --color-border:        var(--border);
+  --color-border-strong: var(--border-strong);
+
+  /* shadcn compat */
+  --color-card:                var(--card);
+  --color-card-foreground:     var(--card-foreground);
+  --color-popover:             var(--popover);
+  --color-popover-foreground:  var(--popover-foreground);
+  --color-primary:             var(--primary);
+  --color-primary-foreground:  var(--primary-foreground);
+  --color-secondary:           var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted:               var(--muted);
+  --color-muted-foreground:    var(--muted-foreground);
+  --color-destructive:         var(--destructive);
+  --color-input:               var(--input);
+  --color-ring:                var(--ring);
+
+  /* Fonts */
+  --font-ui:   var(--font-syne);
+  --font-sans: var(--font-dm-sans);
+  --font-mono: var(--font-jetbrains-mono);
+
+  /* Radius — direct values (no var→var to avoid conflicts) */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+/* ── Base layer ──────────────────────────────────────────────────────────── */
+@layer base {
+  ::-webkit-scrollbar              { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track        { background: transparent; }
+  ::-webkit-scrollbar-thumb        { background: rgba(255,255,255,0.10); border-radius: 99px; }
+  ::-webkit-scrollbar-thumb:hover  { background: rgba(255,255,255,0.20); }
+
+  * { @apply border-border; }
+
+  body {
+    @apply bg-background text-foreground font-sans;
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
   }
-}
-
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
 }
