@@ -8930,6 +8930,7 @@ __metadata:
     lucide-react: "npm:^1.7.0"
     next: "npm:16.2.1"
     pg: "npm:^8.20.0"
+    prisma: "npm:^7.6.0"
     react: "npm:19.2.4"
     react-dom: "npm:19.2.4"
     shadcn: "npm:^4.1.1"
