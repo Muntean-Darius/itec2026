@@ -5,35 +5,43 @@
 
 /* ── CSS Custom Properties ───────────────────────────────────────────────── */
 :root {
-  /* Backgrounds */
-  --background:   #0E1117;
-  --panel:        #161B22;
-  --elevated:     #1C2333;
-  --terminal-bg:  #0A0D12;
-  --ai-block:     #1a2438;
-  --hover:        #1f2937;
+  /* Backgrounds — dark navy */
+  --background:   #0C1929;
+  --panel:        #0F2035;
+  --elevated:     #162840;
+  --terminal-bg:  #070F1A;
+  --ai-block:     #0E1F38;
+  --hover:        #1A3050;
 
   /* Text */
-  --foreground:   #E6EDF3;
-  --text-sec:     #8B949E;
-  --text-dim:     #484F58;
+  --foreground:   #E4EEFF;
+  --text-sec:     #7A9BC4;
+  --text-dim:     #3E5578;
 
-  /* Accent — teal */
-  --accent:       #00D9C0;
-  --accent-dim:   rgba(0, 217, 192, 0.15);
-  --accent-glow:  rgba(0, 217, 192, 0.4);
+  /* Primary accent — royal/navy blue */
+  --accent:       #4F86F7;
+  --accent-dim:   rgba(79, 134, 247, 0.15);
+  --accent-glow:  rgba(79, 134, 247, 0.4);
+
+  /* Secondary accent — dark crimson red */
+  --crimson:      #C23B3B;
+  --crimson-dim:  rgba(194, 59, 59, 0.15);
+  --crimson-glow: rgba(194, 59, 59, 0.35);
+
+  /* Additional — green / amber-yellow */
+  --green:        #5EBC70;
+  --lime:         #7DC940;
+  --amber:        #C9AA2A;
 
   /* Status palette */
-  --purple:       #A78BFA;
-  --orange:       #FB923C;
-  --blue:         #60A5FA;
-  --green:        #4ADE80;
-  --amber:        #FCD34D;
-  --red:          #F87171;
+  --purple:       #9B8AFA;
+  --orange:       #E0834A;
+  --blue:         #4F86F7;
+  --red:          #C23B3B;
 
-  /* Borders */
-  --border:        rgba(255, 255, 255, 0.06);
-  --border-strong: rgba(255, 255, 255, 0.10);
+  /* Borders — blue-tinted */
+  --border:        rgba(79, 134, 247, 0.08);
+  --border-strong: rgba(79, 134, 247, 0.16);
 
   /* shadcn component aliases */
   --card:                var(--panel);
@@ -41,7 +49,7 @@
   --popover:             var(--elevated);
   --popover-foreground:  var(--foreground);
   --primary:             var(--accent);
-  --primary-foreground:  #0a1a18;
+  --primary-foreground:  #050D1F;
   --secondary:           var(--elevated);
   --secondary-foreground: var(--foreground);
   --muted:               var(--elevated);
@@ -50,7 +58,7 @@
   --destructive-foreground: #fff;
   --input:               var(--elevated);
   --ring:                var(--accent);
-  --radius:              6px;
+  --radius:              10px;
 }
 
 /* ── Tailwind v4 theme tokens ────────────────────────────────────────────── */
@@ -68,15 +76,21 @@
   --color-text-dim:     var(--text-dim);
 
   /* Accent */
-  --color-accent:       var(--accent);
-  --color-accent-foreground: #0a1a18;
+  --color-accent:            var(--accent);
+  --color-accent-foreground: #050D1F;
+
+  /* Secondary */
+  --color-crimson:      var(--crimson);
+
+  /* Additional */
+  --color-green:        var(--green);
+  --color-lime:         var(--lime);
+  --color-amber:        var(--amber);
 
   /* Status */
   --color-purple:       var(--purple);
   --color-orange:       var(--orange);
   --color-blue:         var(--blue);
-  --color-green:        var(--green);
-  --color-amber:        var(--amber);
   --color-red:          var(--red);
 
   /* Borders */
@@ -103,19 +117,19 @@
   --font-sans: var(--font-dm-sans);
   --font-mono: var(--font-jetbrains-mono);
 
-  /* Radius — direct values (no var→var to avoid conflicts) */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
-  --radius-xl: 14px;
+  /* Radius — rounder */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
 }
 
 /* ── Base layer ──────────────────────────────────────────────────────────── */
 @layer base {
   ::-webkit-scrollbar              { width: 5px; height: 5px; }
   ::-webkit-scrollbar-track        { background: transparent; }
-  ::-webkit-scrollbar-thumb        { background: rgba(255,255,255,0.10); border-radius: 99px; }
-  ::-webkit-scrollbar-thumb:hover  { background: rgba(255,255,255,0.20); }
+  ::-webkit-scrollbar-thumb        { background: rgba(79,134,247,0.15); border-radius: 99px; }
+  ::-webkit-scrollbar-thumb:hover  { background: rgba(79,134,247,0.28); }
 
   * { @apply border-border; }
 

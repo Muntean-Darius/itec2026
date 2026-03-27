@@ -30,7 +30,7 @@ export function Sidebar() {
             className={cn(
               "flex items-center gap-1.5 px-3 py-1.5 text-[12.5px] transition-all duration-100 relative",
               pathname === href
-                ? "bg-[rgba(0,217,192,0.08)] text-foreground"
+                ? "bg-[rgba(79,134,247,0.1)] text-foreground"
                 : "text-text-sec hover:bg-elevated hover:text-foreground"
             )}
           >
