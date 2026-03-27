@@ -15,6 +15,7 @@ coverage
 build
 out
 .next
+apps/server/dist
 
 # generated files
 apps/server/src/generated/prisma
