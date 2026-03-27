@@ -13,6 +13,7 @@ import type {
 import { registerCollabHandlers } from "./sockets/collabHandler.js";
 import { registerRunnerHandlers } from "./sockets/runnerHandler.js";
 import { registerAiHandlers } from "./sockets/aiHandler.js";
+import { attachYWebsocketServer } from "./services/yWebsocketService.js";
 
 function getProjectId(value: unknown): string {
 	if (typeof value === "string") {
@@ -57,6 +58,8 @@ const io = new Server<
 	},
 });
 
+const ywsPath = attachYWebsocketServer(httpServer);
+
 io.use((socket, next) => {
 	const projectId =
 		getProjectId(socket.handshake.auth?.projectId) ||
@@ -88,4 +91,5 @@ io.on("connection", (socket) => {
 
 httpServer.listen(port, () => {
 	console.log(`Server listening on http://localhost:${port}`);
+	console.log(`Y-WebSocket listening on ws://localhost:${port}${ywsPath}/<docName>`);
 });
