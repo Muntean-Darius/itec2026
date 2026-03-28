@@ -61,7 +61,7 @@ export function PresenceDock({
             <Bot className="h-4 w-4 text-ai" />
           </Button>
         </TooltipTrigger>
-        <TooltipContent>AI Agent Roster</TooltipContent>
+        <TooltipContent>AI Assistants & Chats</TooltipContent>
       </Tooltip>
 
       {/* Other users */}

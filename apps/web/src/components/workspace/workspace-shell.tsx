@@ -38,7 +38,6 @@ import { TimeTravelSlider } from "./time-travel-slider"
 import { AgentRoster } from "./agent-roster"
 import { AIInlinePrompt } from "./ai-inline-prompt"
 import { AIPanel } from "./ai-panel"
-import { NewFileDialog } from "./new-file-dialog"
 import { useCollaboration } from "@/lib/collaboration"
 import { cn } from "@/lib/utils"
 import { getWorkspaceInviteUrl } from "@/lib/workspace-share"
@@ -58,7 +57,7 @@ const SIDEBAR_MAX = 400
 const SIDEBAR_DEFAULT = 260
 const TERMINAL_MIN = 80
 const TERMINAL_MAX = 500
-const TERMINAL_DEFAULT = 220
+const TERMINAL_DEFAULT = 300
 const AGENT_PANEL_MIN = 220
 const AGENT_PANEL_MAX = 400
 const AGENT_PANEL_DEFAULT = AGENT_PANEL_MAX
@@ -106,12 +105,11 @@ export function WorkspaceShell({
   const [agentPanelWidth, setAgentPanelWidth] = useState(AGENT_PANEL_DEFAULT)
 
   // Workspace state
-  const [isRunning, setIsRunning] = useState(false)
   const [timeTravelActive, setTimeTravelActive] = useState(false)
   const [timeTravelSnapshot, setTimeTravelSnapshot] = useState<Snapshot | null>(null)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [aiPromptOpen, setAiPromptOpen] = useState(false)
-  const [newFileDialogOpen, setNewFileDialogOpen] = useState(false)
+  const [createFileTrigger, setCreateFileTrigger] = useState(0)
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
   const [linkCopied, setLinkCopied] = useState(false)
   const [tabContextMenu, setTabContextMenu] = useState<{ x: number; y: number; path: string } | null>(null)
@@ -176,7 +174,7 @@ export function WorkspaceShell({
 
   // Recent AI accepts for quick-undo (expires after 15 seconds)
   const [recentAIAccepts, setRecentAIAccepts] = useState<RecentAIAccept[]>([])
-  
+
   // Recent AI undos for redo (expires after 15 seconds)
   const [recentAIUndos, setRecentAIUndos] = useState<RecentAIUndo[]>([])
 
@@ -312,10 +310,12 @@ export function WorkspaceShell({
     [collab, handleCloseTab]
   )
 
+  const isRunning = activeTerminalId ? (collab.terminalBusy[activeTerminalId] ?? false) : false
+
   const handleRun = useCallback(() => {
-    setIsRunning(true)
     setTerminalOpen(true)
-    setTimeout(() => setIsRunning(false), 3000)
+    // Focus the terminal input — the actual command runs via terminal input
+    // This button just ensures the terminal is visible
   }, [])
 
   const handleCreateFile = useCallback(
@@ -490,12 +490,12 @@ export function WorkspaceShell({
     (accept: RecentAIAccept) => {
       // Revert the file content using the original content
       collab.updateFileContent(accept.filePath, accept.originalContent)
-      
+
       // Remove from recent accepts
       setRecentAIAccepts((prev) =>
         prev.filter((a) => a.messageId !== accept.messageId)
       )
-      
+
       // Add to recent undos for potential redo
       setRecentAIUndos((prev) => [
         ...prev,
@@ -508,7 +508,7 @@ export function WorkspaceShell({
           startLine: accept.startLine,
         },
       ])
-      
+
       // Show toast
       import("sonner").then(({ toast }) => {
         toast.success("AI change reverted")
@@ -522,12 +522,12 @@ export function WorkspaceShell({
     (undo: RecentAIUndo) => {
       // Restore the AI-generated content
       collab.updateFileContent(undo.filePath, undo.newContent)
-      
+
       // Remove from recent undos
       setRecentAIUndos((prev) =>
         prev.filter((u) => u.messageId !== undo.messageId)
       )
-      
+
       // Show toast
       import("sonner").then(({ toast }) => {
         toast.success("AI change restored")
@@ -655,14 +655,14 @@ export function WorkspaceShell({
               <Button
                 size="sm"
                 variant={isRunning ? "destructive" : "default"}
-                onClick={isRunning ? () => setIsRunning(false) : handleRun}
+                onClick={handleRun}
                 className="h-7 gap-1.5 px-3 text-xs"
-                disabled={!collab.connected && !isRunning}
+                disabled={!collab.connected}
               >
                 {isRunning ? (
                   <>
                     <Square className="h-3 w-3" />
-                    Stop
+                    Running...
                   </>
                 ) : (
                   <>
@@ -672,7 +672,7 @@ export function WorkspaceShell({
                 )}
               </Button>
             </TooltipTrigger>
-            {!collab.connected && !isRunning && (
+            {!collab.connected && (
               <TooltipContent>Server connection required to run code</TooltipContent>
             )}
           </Tooltip>
@@ -737,10 +737,10 @@ export function WorkspaceShell({
                 activeFilePath={activeFilePath}
                 presence={livePresence}
                 onOpenFile={handleOpenFile}
-                onNewFile={() => setNewFileDialogOpen(true)}
                 onDeleteFile={handleDeleteFile}
                 onRenameFile={(oldPath, newPath) => collab.renameFile(oldPath, newPath)}
                 onCreateFile={handleCreateFile}
+                createFileTrigger={createFileTrigger}
               />
             </aside>
             <ResizeHandle
@@ -785,8 +785,8 @@ export function WorkspaceShell({
                     role="tab"
                     tabIndex={0}
                     aria-selected={isActive}
-                    onClick={() => setActiveFilePath(filePath)}
-                    onKeyDown={(e) => { if (e.key === "Enter") setActiveFilePath(filePath) }}
+                    onClick={() => { setActiveFilePath(filePath); collab.updateAwareness({ activeFile: filePath }) }}
+                    onKeyDown={(e) => { if (e.key === "Enter") { setActiveFilePath(filePath); collab.updateAwareness({ activeFile: filePath }) } }}
                     onContextMenu={(e) => {
                       e.preventDefault()
                       setTabContextMenu({ x: e.clientX, y: e.clientY, path: filePath })
@@ -911,7 +911,6 @@ export function WorkspaceShell({
                 className="shrink-0 overflow-hidden border-t border-border-subtle"
               >
                 <TerminalPanel
-                  isRunning={isRunning}
                   sessions={collab.terminalSessions}
                   activeSessionId={activeTerminalId}
                   onSelectSession={setActiveTerminalId}
@@ -929,6 +928,8 @@ export function WorkspaceShell({
                   currentUserId={currentUser.id}
                   dockerStatus={collab.dockerStatus}
                   dockerError={collab.dockerError}
+                  terminalBusy={collab.terminalBusy}
+                  terminalCwds={collab.terminalCwds}
                 />
               </div>
             </>
@@ -1171,14 +1172,6 @@ export function WorkspaceShell({
         onOpenFile={handleOpenFile}
       />
 
-      {/* New File Dialog */}
-      <NewFileDialog
-        open={newFileDialogOpen}
-        onOpenChange={setNewFileDialogOpen}
-        existingPaths={files.map((f) => f.path)}
-        onCreateFile={handleCreateFile}
-      />
-
       {/* Tab Context Menu (reuses sidebar file context menu) */}
       <AnimatePresence>
         {tabContextMenu && (
@@ -1206,7 +1199,7 @@ export function WorkspaceShell({
         onToggleTerminal={() => setTerminalOpen((prev) => !prev)}
         onRun={handleRun}
         onToggleAiPrompt={() => setAiPromptOpen((prev) => !prev)}
-        onNewFile={() => setNewFileDialogOpen(true)}
+        onNewFile={() => setCreateFileTrigger((n) => n + 1)}
         onToggleTimeTravel={handleToggleTimeTravel}
         onSaveSnapshot={() => {
           void createLocalSnapshot("human", {

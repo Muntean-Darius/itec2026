@@ -73,6 +73,7 @@ export interface TerminalLine {
   content: string
   timestamp: string
   userId?: string
+  cwd?: string
 }
 
 /** Snapshot kind for time-travel timeline visualization */

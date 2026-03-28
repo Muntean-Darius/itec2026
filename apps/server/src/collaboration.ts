@@ -27,6 +27,7 @@ import {
   getContainerStatusInfo,
   destroyContainer,
   executeCommand,
+  getSessionCwd,
   onContainerStatus,
   onContainerStats,
   getContainerStats,
@@ -310,7 +311,9 @@ export function setupCollaboration(io: SocketIOServer) {
               const fMap = room.doc.getMap("files")
               fMap.forEach((value: unknown, key: string) => {
                 if (value && typeof (value as { toString(): string }).toString === "function") {
-                  files.set(key, (value as { toString(): string }).toString())
+                  // Normalize: strip leading slash to match container paths
+                  const normalizedKey = key.startsWith("/") ? key.slice(1) : key
+                  files.set(normalizedKey, (value as { toString(): string }).toString())
                 }
               })
               return files
@@ -319,7 +322,13 @@ export function setupCollaboration(io: SocketIOServer) {
               const fMap = room.doc.getMap("files")
               room.doc.transact(() => {
                 for (const [filePath, content] of containerFiles) {
-                  const existing = fMap.get(filePath)
+                  // Try both with and without leading slash
+                  let existing = fMap.get(filePath)
+                  let actualKey = filePath
+                  if (!(existing instanceof Y.Text)) {
+                    existing = fMap.get("/" + filePath) as unknown
+                    if (existing instanceof Y.Text) actualKey = "/" + filePath
+                  }
                   if (existing instanceof Y.Text) {
                     const currentContent = existing.toString()
                     if (currentContent !== content) {
@@ -409,6 +418,10 @@ export function setupCollaboration(io: SocketIOServer) {
 
       const room = currentRoom
       const projectId = currentProjectId
+      const roomName = `project:${projectId}`
+
+      // Get the current working directory for this session before executing
+      const stdinCwd = getSessionCwd(projectId, msg.sessionId)
 
       const stdinLine = {
         id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -416,6 +429,7 @@ export function setupCollaboration(io: SocketIOServer) {
         content: msg.content,
         timestamp: new Date().toISOString(),
         userId: msg.userId,
+        cwd: stdinCwd,
       }
 
       // Push the stdin line & clear shared input immediately
@@ -427,11 +441,14 @@ export function setupCollaboration(io: SocketIOServer) {
         }
       }, "server")
 
+      // Notify all clients that this terminal session is busy
+      io.to(roomName).emit("terminal-busy", { sessionId: msg.sessionId, busy: true })
+
       // Sync Yjs files → container before executing the command
       await syncBeforeCommand(projectId)
 
       // Execute command in Docker container
-      const { output, exitCode } = await executeCommand(projectId, msg.sessionId, msg.content)
+      const { output, exitCode, cwd } = await executeCommand(projectId, msg.sessionId, msg.content)
 
       if (output) {
         const lineType = (exitCode !== null && exitCode !== 0) ? "stderr" as const : "stdout" as const
@@ -447,6 +464,9 @@ export function setupCollaboration(io: SocketIOServer) {
 
       // After command, merge container file changes back into Yjs (additive, not destructive)
       await syncAfterCommand(projectId)
+
+      // Notify all clients that this terminal session is done + new cwd
+      io.to(roomName).emit("terminal-busy", { sessionId: msg.sessionId, busy: false, cwd })
     })
 
     // ── AI Chat ──────────────────────────────────────────────────────────
