@@ -252,3 +252,30 @@
     0 0 0 1px var(--error-muted-border),
     0 0 20px hsla(0, 62%, 55%, 0.15);
 }
+
+/* ═══ Monaco AI Diff Decorations ═══ */
+.ai-diff-update-line {
+  background: hsla(172, 66%, 50%, 0.04) !important;
+  border-left: 2px solid hsla(172, 66%, 50%, 0.3);
+}
+
+.ai-diff-create-line {
+  background: hsla(152, 69%, 53%, 0.06) !important;
+  border-left: 2px solid hsla(152, 69%, 53%, 0.4);
+}
+
+.ai-diff-delete-line {
+  background: hsla(0, 84%, 60%, 0.06) !important;
+  border-left: 2px solid hsla(0, 84%, 60%, 0.3);
+}
+
+.ai-diff-glyph,
+.ai-diff-glyph-create,
+.ai-diff-glyph-delete {
+  width: 4px !important;
+  margin-left: 3px;
+  border-radius: 2px;
+}
+.ai-diff-glyph        { background: hsla(172, 66%, 50%, 0.5); }
+.ai-diff-glyph-create { background: hsla(152, 69%, 53%, 0.5); }
+.ai-diff-glyph-delete { background: hsla(0, 84%, 60%, 0.5); }

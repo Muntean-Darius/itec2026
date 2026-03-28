@@ -84,3 +84,40 @@ export interface Snapshot {
   changeCount: number
   userId: string
 }
+
+// ─── AI Chat & Operations ────────────────────────────────────────────────
+
+export interface FileOperation {
+  type: "create" | "update" | "delete"
+  path: string
+  /** Full content for create; new full content for update; ignored for delete */
+  content?: string
+}
+
+export type AIChatMessageRole = "user" | "assistant"
+
+export interface AIChatMessage {
+  id: string
+  role: AIChatMessageRole
+  content: string
+  /** If assistant, the file operations it proposes */
+  operations?: FileOperation[]
+  /** Per-operation accept/reject status: "pending" | "accepted" | "rejected" */
+  operationStatuses?: ("pending" | "accepted" | "rejected")[]
+  /** Timestamp */
+  timestamp: string
+  /** User who sent (if role=user) */
+  userId?: string
+  userName?: string
+}
+
+export interface AIChatSession {
+  id: string
+  agentId: string
+  agentName: string
+  /** Custom chat name (suggested by AI or renamed by user) */
+  name?: string
+  messages: AIChatMessage[]
+  /** Whether AI is currently generating a response */
+  isGenerating: boolean
+}

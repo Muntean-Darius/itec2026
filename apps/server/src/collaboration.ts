@@ -20,6 +20,8 @@ import * as decoding from "lib0/decoding"
 import * as syncProtocol from "y-protocols/sync"
 import * as awarenessProtocol from "y-protocols/awareness"
 import { loadLatestSnapshot } from "./snapshot-store.js"
+import { streamAIChat, mergeWithAI } from "./ai.js"
+import type { FileOperation, ChatMessage } from "./ai.js"
 
 // ─── Fake Terminal Responses ─────────────────────────────────────────────
 
@@ -96,6 +98,8 @@ function getOrCreateRoom(projectId: string, io?: SocketIOServer): ProjectRoom {
   doc.getMap("files")     // Y.Map<string, Y.Text>
   doc.getMap("meta")      // Y.Map with name, description, language
   doc.getMap("terminals") // Y.Map<sessionId, Y.Map { name: string, lines: Y.Array }>
+  doc.getMap("aiChats")   // Y.Map<chatId, Y.Map { id, agentId, agentName, messages: Y.Array, isGenerating }>
+  doc.getMap("agents")    // Y.Map<agentId, Y.Map { id, name, persona, systemPrompt, color, isActive }>
 
   const now = Date.now()
   room = {
@@ -380,6 +384,414 @@ export function setupCollaboration(io: SocketIOServer) {
         const inputText = sessionMap.get("input")
         if (inputText instanceof Y.Text && inputText.length > 0) {
           inputText.delete(0, inputText.length)
+        }
+      }, "server")
+    })
+
+    // ── AI Chat ──────────────────────────────────────────────────────────
+    socket.on("ai-chat", async (msg: {
+      chatId: string
+      messageId: string
+      content: string
+      userId: string
+      userName: string
+      agentId: string
+      agentName: string
+      agentInstructions?: string
+    }) => {
+      if (!currentRoom || !currentProjectId) return
+      const room = currentRoom
+      const projectId = currentProjectId
+      const roomName = `project:${projectId}`
+
+      // Get the AI chats Y.Map (each chat is a Y.Map with messages Y.Array)
+      const aiChatsMap = room.doc.getMap("aiChats")
+
+      // Get or create the chat session — client may have already created
+      // a skeleton Y.Map (with just an "input" field) for collaborative input,
+      // so always ensure the required fields exist.
+      let chatMap = aiChatsMap.get(msg.chatId)
+      if (!chatMap || !(chatMap instanceof Y.Map)) {
+        room.doc.transact(() => {
+          const newChat = new Y.Map()
+          newChat.set("id", msg.chatId)
+          newChat.set("agentId", msg.agentId)
+          newChat.set("agentName", msg.agentName)
+          newChat.set("messages", new Y.Array())
+          newChat.set("isGenerating", false)
+          aiChatsMap.set(msg.chatId, newChat)
+          chatMap = newChat
+        }, "server")
+      } else {
+        // Chat map exists but may be missing required fields (skeleton from client)
+        const cm = chatMap as Y.Map<unknown>
+        room.doc.transact(() => {
+          if (!cm.get("id")) cm.set("id", msg.chatId)
+          if (!cm.get("agentId")) cm.set("agentId", msg.agentId)
+          if (!cm.get("agentName")) cm.set("agentName", msg.agentName)
+          if (!cm.get("messages")) cm.set("messages", new Y.Array())
+          if (cm.get("isGenerating") === undefined) cm.set("isGenerating", false)
+        }, "server")
+      }
+
+      const messagesArr = (chatMap as Y.Map<unknown>).get("messages") as Y.Array<unknown>
+      if (!messagesArr) return
+
+      // Add the user message to Yjs
+      room.doc.transact(() => {
+        messagesArr.push([{
+          id: msg.messageId,
+          role: "user",
+          content: msg.content,
+          timestamp: new Date().toISOString(),
+          userId: msg.userId,
+          userName: msg.userName,
+        }])
+        ;(chatMap as Y.Map<unknown>).set("isGenerating", true)
+      }, "server")
+
+      // Gather current file contents from the Yjs doc
+      const filesMap = room.doc.getMap("files")
+      const fileContents = new Map<string, string>()
+      filesMap.forEach((value: unknown, key: string) => {
+        if (value instanceof Y.Text) {
+          fileContents.set(key, value.toString())
+        }
+      })
+
+      // Build chat history from Yjs messages array
+      const chatHistory: ChatMessage[] = []
+      const messagesArray = messagesArr.toArray() as Array<Record<string, unknown>>
+      for (const m of messagesArray) {
+        if (m.role === "user" || m.role === "assistant") {
+          chatHistory.push({
+            role: m.role as "user" | "assistant",
+            content: m.content as string,
+            operations: m.operations as FileOperation[] | undefined,
+          })
+        }
+      }
+
+      // Create the assistant message placeholder
+      const assistantMsgId = `ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+
+      try {
+        // Stream the response — send text chunks to all clients via socket
+        const result = await streamAIChat({
+          userMessage: msg.content,
+          files: fileContents,
+          chatHistory: chatHistory.slice(0, -1), // exclude the just-added user message (it's the prompt)
+          agentInstructions: msg.agentInstructions,
+          onTextChunk: (chunk: string) => {
+            // Broadcast streaming chunk to room
+            room.io?.to(roomName).emit("ai-chat-stream", {
+              chatId: msg.chatId,
+              messageId: assistantMsgId,
+              chunk,
+            })
+          },
+        })
+
+        // Signal streaming complete to clients
+        room.io?.to(roomName).emit("ai-chat-stream", {
+          chatId: msg.chatId,
+          messageId: assistantMsgId,
+          chunk: "",
+          done: true,
+        })
+
+        // Add the full assistant message with operations to Yjs
+        const opStatuses = result.operations.map(() => "pending" as const)
+
+        room.doc.transact(() => {
+          messagesArr.push([{
+            id: assistantMsgId,
+            role: "assistant",
+            content: result.message,
+            operations: result.operations,
+            operationStatuses: opStatuses,
+            timestamp: new Date().toISOString(),
+          }])
+          ;(chatMap as Y.Map<unknown>).set("isGenerating", false)
+          // Update chat name if AI suggested one (typically on first response)
+          if (result.suggestedChatName) {
+            ;(chatMap as Y.Map<unknown>).set("name", result.suggestedChatName)
+          }
+        }, "server")
+
+      } catch (err) {
+        console.error(`[iTECify] AI chat error:`, err)
+
+        // Add error message
+        room.doc.transact(() => {
+          messagesArr.push([{
+            id: assistantMsgId,
+            role: "assistant",
+            content: `Error: ${(err as Error).message || "AI request failed. Please try again."}`,
+            operations: [],
+            operationStatuses: [],
+            timestamp: new Date().toISOString(),
+          }])
+          ;(chatMap as Y.Map<unknown>).set("isGenerating", false)
+        }, "server")
+      }
+    })
+
+    // ── AI operation accept/reject ─────────────────────────────────────
+    socket.on("ai-operation-action", (msg: {
+      chatId: string
+      messageId: string
+      operationIndex: number
+      action: "accept" | "reject"
+    }) => {
+      if (!currentRoom || !currentProjectId) return
+      const room = currentRoom
+
+      const aiChatsMap = room.doc.getMap("aiChats")
+      const chatMap = aiChatsMap.get(msg.chatId) as Y.Map<unknown> | undefined
+      if (!chatMap) return
+
+      const messagesArr = chatMap.get("messages") as Y.Array<unknown>
+      if (!messagesArr) return
+
+      // Find the message and update its operation status
+      const messages = messagesArr.toArray() as Array<Record<string, unknown>>
+      const msgIndex = messages.findIndex(m => m.id === msg.messageId)
+      if (msgIndex === -1) return
+
+      const message = messages[msgIndex]
+      const operations = message.operations as Array<Record<string, unknown>> | undefined
+      const statuses = (message.operationStatuses as string[]) || []
+
+      if (!operations || msg.operationIndex >= operations.length) return
+
+      // Update status
+      const newStatuses = [...statuses]
+      newStatuses[msg.operationIndex] = msg.action === "accept" ? "accepted" : "rejected"
+
+      // If accepting, apply the operation to the files
+      if (msg.action === "accept") {
+        const op = operations[msg.operationIndex]
+        const filesMap = room.doc.getMap("files")
+
+        room.doc.transact(() => {
+          if (op.type === "create" || op.type === "update") {
+            const path = op.path as string
+            const content = (op.content as string) || ""
+            let ytext = filesMap.get(path)
+            if (ytext instanceof Y.Text) {
+              // Update existing file
+              ytext.delete(0, ytext.length)
+              ytext.insert(0, content)
+            } else {
+              // Create new file
+              const newText = new Y.Text()
+              newText.insert(0, content)
+              filesMap.set(path, newText)
+            }
+          } else if (op.type === "delete") {
+            filesMap.delete(op.path as string)
+          }
+        }, "server")
+      }
+
+      // Update the message in Yjs
+      room.doc.transact(() => {
+        // We need to replace the message in the array
+        // Y.Array doesn't support in-place update, so we delete and re-insert
+        const updatedMsg = { ...message, operationStatuses: newStatuses }
+        messagesArr.delete(msgIndex, 1)
+        messagesArr.insert(msgIndex, [updatedMsg])
+      }, "server")
+    })
+
+    // ── AI bulk accept/reject all operations ───────────────────────────
+    socket.on("ai-bulk-action", (msg: {
+      chatId: string
+      messageId: string
+      action: "accept" | "reject"
+    }) => {
+      if (!currentRoom || !currentProjectId) return
+      const room = currentRoom
+
+      const aiChatsMap = room.doc.getMap("aiChats")
+      const chatMap = aiChatsMap.get(msg.chatId) as Y.Map<unknown> | undefined
+      if (!chatMap) return
+
+      const messagesArr = chatMap.get("messages") as Y.Array<unknown>
+      if (!messagesArr) return
+
+      const messages = messagesArr.toArray() as Array<Record<string, unknown>>
+      const msgIndex = messages.findIndex(m => m.id === msg.messageId)
+      if (msgIndex === -1) return
+
+      const message = messages[msgIndex]
+      const operations = message.operations as Array<Record<string, unknown>> | undefined
+      if (!operations) return
+
+      const filesMap = room.doc.getMap("files")
+      const newStatuses = operations.map(() => msg.action === "accept" ? "accepted" : "rejected")
+
+      room.doc.transact(() => {
+        // Apply all operations if accepting
+        if (msg.action === "accept") {
+          for (const op of operations) {
+            if (op.type === "create" || op.type === "update") {
+              const path = op.path as string
+              const content = (op.content as string) || ""
+              let ytext = filesMap.get(path)
+              if (ytext instanceof Y.Text) {
+                ytext.delete(0, ytext.length)
+                ytext.insert(0, content)
+              } else {
+                const newText = new Y.Text()
+                newText.insert(0, content)
+                filesMap.set(path, newText)
+              }
+            } else if (op.type === "delete") {
+              filesMap.delete(op.path as string)
+            }
+          }
+        }
+
+        // Update the message
+        const updatedMsg = { ...message, operationStatuses: newStatuses }
+        messagesArr.delete(msgIndex, 1)
+        messagesArr.insert(msgIndex, [updatedMsg])
+      }, "server")
+    })
+
+    // ── AI merge conflict resolution ───────────────────────────────────
+    socket.on("ai-merge", async (msg: {
+      chatId: string
+      filePath: string
+      originalContent: string
+      versionA: string
+      versionB: string
+      contextA: string
+      contextB: string
+    }) => {
+      if (!currentRoom || !currentProjectId) return
+      const roomName = `project:${currentProjectId}`
+
+      try {
+        const result = await mergeWithAI({
+          filePath: msg.filePath,
+          originalContent: msg.originalContent,
+          versionA: msg.versionA,
+          versionB: msg.versionB,
+          contextA: msg.contextA,
+          contextB: msg.contextB,
+        })
+
+        // Send merge result back to room
+        currentRoom.io?.to(roomName).emit("ai-merge-result", {
+          chatId: msg.chatId,
+          filePath: msg.filePath,
+          merged: result.merged,
+          explanation: result.explanation,
+        })
+      } catch (err) {
+        currentRoom.io?.to(roomName).emit("ai-merge-result", {
+          chatId: msg.chatId,
+          filePath: msg.filePath,
+          merged: null,
+          explanation: `Merge failed: ${(err as Error).message}`,
+        })
+      }
+    })
+
+    // ── Rename AI chat ─────────────────────────────────────────────────
+    socket.on("rename-chat", (msg: { chatId: string; name: string }) => {
+      if (!currentRoom || !currentProjectId) return
+      const room = currentRoom
+      const aiChatsMap = room.doc.getMap("aiChats")
+      const chatMap = aiChatsMap.get(msg.chatId) as Y.Map<unknown> | undefined
+      if (!chatMap) return
+      room.doc.transact(() => {
+        chatMap.set("name", msg.name)
+      }, "server")
+    })
+
+    // ── Delete AI chat ─────────────────────────────────────────────────
+    socket.on("delete-chat", (msg: { chatId: string }) => {
+      if (!currentRoom || !currentProjectId) return
+      const room = currentRoom
+      const aiChatsMap = room.doc.getMap("aiChats")
+      room.doc.transact(() => {
+        aiChatsMap.delete(msg.chatId)
+      }, "server")
+    })
+
+    // ── Create AI agent ────────────────────────────────────────────────
+    socket.on("create-agent", (msg: {
+      id: string
+      name: string
+      persona: string
+      systemPrompt: string
+      color: string
+      userId: string
+    }) => {
+      if (!currentRoom || !currentProjectId) return
+      const room = currentRoom
+
+      const agentsMap = room.doc.getMap("agents")
+      room.doc.transact(() => {
+        const agentMap = new Y.Map()
+        agentMap.set("id", msg.id)
+        agentMap.set("name", msg.name)
+        agentMap.set("persona", msg.persona)
+        agentMap.set("systemPrompt", msg.systemPrompt)
+        agentMap.set("color", msg.color)
+        agentMap.set("isActive", true)
+        agentMap.set("createdById", msg.userId)
+        agentsMap.set(msg.id, agentMap)
+      }, "server")
+    })
+
+    // ── Update AI agent ────────────────────────────────────────────────
+    socket.on("update-agent", (msg: {
+      id: string
+      name?: string
+      persona?: string
+      systemPrompt?: string
+      color?: string
+      isActive?: boolean
+    }) => {
+      if (!currentRoom || !currentProjectId) return
+      const room = currentRoom
+
+      const agentsMap = room.doc.getMap("agents")
+      const agentMap = agentsMap.get(msg.id)
+      if (!agentMap || !(agentMap instanceof Y.Map)) return
+
+      room.doc.transact(() => {
+        if (msg.name !== undefined) agentMap.set("name", msg.name)
+        if (msg.persona !== undefined) agentMap.set("persona", msg.persona)
+        if (msg.systemPrompt !== undefined) agentMap.set("systemPrompt", msg.systemPrompt)
+        if (msg.color !== undefined) agentMap.set("color", msg.color)
+        if (msg.isActive !== undefined) agentMap.set("isActive", msg.isActive)
+      }, "server")
+    })
+
+    // ── Delete AI agent ────────────────────────────────────────────────
+    socket.on("delete-agent", (msg: { id: string }) => {
+      if (!currentRoom || !currentProjectId) return
+      const room = currentRoom
+
+      const agentsMap = room.doc.getMap("agents")
+      room.doc.transact(() => {
+        agentsMap.delete(msg.id)
+        // Also delete associated chat sessions
+        const aiChatsMap = room.doc.getMap("aiChats")
+        const keysToDelete: string[] = []
+        aiChatsMap.forEach((value: unknown, key: string) => {
+          if (value instanceof Y.Map && value.get("agentId") === msg.id) {
+            keysToDelete.push(key)
+          }
+        })
+        for (const key of keysToDelete) {
+          aiChatsMap.delete(key)
         }
       }, "server")
     })

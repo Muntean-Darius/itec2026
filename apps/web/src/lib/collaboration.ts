@@ -9,7 +9,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react"
 import { io, Socket } from "socket.io-client"
-import type { User, FileNode, PresenceUser, TerminalLine } from "@/data/types"
+import type { User, FileNode, PresenceUser, TerminalLine, AIChatMessage, AIChatSession, AIAgent } from "@/data/types"
 
 const COLLAB_SERVER_URL =
   process.env.NEXT_PUBLIC_COLLAB_SERVER_URL || "http://localhost:4000"
@@ -44,10 +44,13 @@ export interface UseCollaborationReturn {
   localClientId: number | null
   meta: { name: string; description: string }
   terminalSessions: TerminalSession[]
+  aiChatSessions: AIChatSession[]
+  aiAgents: AIAgent[]
   getYText: (path: string) => unknown | null
   getYdoc: () => unknown | null
   getAwareness: () => unknown | null
   getTerminalInputYText: (sessionId: string) => unknown | null
+  getAIChatInputYText: (chatId: string) => unknown | null
   createFile: (path: string, content?: string) => void
   deleteFile: (path: string) => void
   renameFile: (oldPath: string, newPath: string) => void
@@ -57,6 +60,42 @@ export interface UseCollaborationReturn {
   createTerminalSession: (name?: string) => string | null
   deleteTerminalSession: (sessionId: string) => void
   sendTerminalInput: (sessionId: string, content: string) => void
+  /** Send a chat message to an AI agent */
+  sendAIChat: (opts: {
+    chatId: string
+    content: string
+    agentId: string
+    agentName: string
+    agentInstructions?: string
+  }) => void
+  /** Rename an AI chat */
+  renameAIChat: (chatId: string, name: string) => void
+  /** Delete an AI chat */
+  deleteAIChat: (chatId: string) => void
+  /** Accept or reject a single AI operation */
+  aiOperationAction: (chatId: string, messageId: string, operationIndex: number, action: "accept" | "reject") => void
+  /** Accept or reject ALL operations in a message */
+  aiBulkAction: (chatId: string, messageId: string, action: "accept" | "reject") => void
+  /** Request AI merge of conflicting file changes */
+  requestAIMerge: (opts: {
+    chatId: string
+    filePath: string
+    originalContent: string
+    versionA: string
+    versionB: string
+    contextA: string
+    contextB: string
+  }) => void
+  /** Create a new AI agent visible to all users */
+  createAgent: (agent: { name: string; persona: string; systemPrompt: string; color: string }) => string
+  /** Update an agent's config */
+  updateAgent: (id: string, updates: Partial<{ name: string; persona: string; systemPrompt: string; color: string; isActive: boolean }>) => void
+  /** Delete an agent */
+  deleteAgent: (id: string) => void
+  /** Subscribe to AI stream chunks — returns unsubscribe function */
+  onAIStreamChunk: (handler: (data: { chatId: string; messageId: string; chunk: string; done?: boolean }) => void) => () => void
+  /** Subscribe to AI merge results — returns unsubscribe function */
+  onAIMergeResult: (handler: (data: { chatId: string; filePath: string; merged: string | null; explanation: string }) => void) => () => void
 }
 
 // ─── Hook ────────────────────────────────────────────────────────────────
@@ -83,6 +122,8 @@ export function useCollaboration({
     description: "",
   })
   const [terminalSessions, setTerminalSessions] = useState<TerminalSession[]>([])
+  const [aiChatSessions, setAIChatSessions] = useState<AIChatSession[]>([])
+  const [aiAgents, setAIAgents] = useState<AIAgent[]>([])
 
   // ── Sync helpers ──
 
@@ -184,6 +225,67 @@ export function useCollaboration({
     setTerminalSessions(sessions)
   }, [])
 
+  const syncAIChatsFromDoc = useCallback(() => {
+    const doc = ydocRef.current
+    if (!doc) return
+    const aiChatsMap = doc.getMap("aiChats")
+    const sessions: AIChatSession[] = []
+
+    aiChatsMap.forEach((value: unknown, key: string) => {
+      if (value && typeof value === "object" && typeof (value as Record<string, unknown>).get === "function") {
+        const chatMap = value as { get(k: string): unknown }
+        const messages: AIChatMessage[] = []
+
+        const messagesArr = chatMap.get("messages")
+        if (messagesArr && typeof (messagesArr as Record<string, unknown>).toArray === "function") {
+          const arr = (messagesArr as { toArray(): unknown[] }).toArray()
+          for (const item of arr) {
+            if (item && typeof item === "object") {
+              messages.push(item as AIChatMessage)
+            }
+          }
+        }
+
+        sessions.push({
+          id: key,
+          agentId: (chatMap.get("agentId") as string) ?? "",
+          agentName: (chatMap.get("agentName") as string) ?? "AI",
+          name: (chatMap.get("name") as string) || undefined,
+          messages,
+          isGenerating: (chatMap.get("isGenerating") as boolean) ?? false,
+        })
+      }
+    })
+
+    sessions.sort((a, b) => a.id.localeCompare(b.id))
+    setAIChatSessions(sessions)
+  }, [])
+
+  const syncAgentsFromDoc = useCallback(() => {
+    const doc = ydocRef.current
+    if (!doc) return
+    const agentsMap = doc.getMap("agents")
+    const agents: AIAgent[] = []
+
+    agentsMap.forEach((value: unknown, key: string) => {
+      if (value && typeof value === "object" && typeof (value as Record<string, unknown>).get === "function") {
+        const agentMap = value as { get(k: string): unknown }
+        agents.push({
+          id: key,
+          name: (agentMap.get("name") as string) ?? "",
+          persona: (agentMap.get("persona") as string) ?? "",
+          avatarUrl: null,
+          systemPrompt: (agentMap.get("systemPrompt") as string) ?? "",
+          color: (agentMap.get("color") as string) ?? "hsl(172, 66%, 50%)",
+          isActive: (agentMap.get("isActive") as boolean) ?? true,
+        })
+      }
+    })
+
+    agents.sort((a, b) => a.name.localeCompare(b.name))
+    setAIAgents(agents)
+  }, [])
+
   // ── Main effect: dynamically load yjs, create doc, connect socket ──
 
   useEffect(() => {
@@ -217,6 +319,8 @@ export function useCollaboration({
       const filesMap = doc.getMap("files")
       const metaMap = doc.getMap("meta")
       const terminalsMap = doc.getMap("terminals")
+      const aiChatsMap = doc.getMap("aiChats")
+      const agentsMap = doc.getMap("agents")
 
       // Seed initial files
       if (initialFiles.length > 0) {
@@ -338,15 +442,21 @@ export function useCollaboration({
       const onFilesChange = () => syncFilesFromDoc()
       const onMetaChange = () => syncMetaFromDoc()
       const onTerminalsChange = () => syncTerminalFromDoc()
+      const onAIChatsChange = () => syncAIChatsFromDoc()
+      const onAgentsChange = () => syncAgentsFromDoc()
       filesMap.observeDeep(onFilesChange)
       metaMap.observeDeep(onMetaChange)
       terminalsMap.observeDeep(onTerminalsChange)
+      aiChatsMap.observeDeep(onAIChatsChange)
+      agentsMap.observeDeep(onAgentsChange)
 
       // Initial sync
       queueMicrotask(() => {
         syncFilesFromDoc()
         syncMetaFromDoc()
         syncTerminalFromDoc()
+        syncAIChatsFromDoc()
+        syncAgentsFromDoc()
       })
 
       // Set awareness — name and color MUST be at top level for y-monaco cursor rendering
@@ -371,6 +481,8 @@ export function useCollaboration({
         filesMap.unobserveDeep(onFilesChange)
         metaMap.unobserveDeep(onMetaChange)
         terminalsMap.unobserveDeep(onTerminalsChange)
+        aiChatsMap.unobserveDeep(onAIChatsChange)
+        agentsMap.unobserveDeep(onAgentsChange)
         awareness.destroy()
         doc.destroy()
         socket.disconnect()
@@ -527,6 +639,159 @@ export function useCollaboration({
     [currentUser.id]
   )
 
+  const getAIChatInputYText = useCallback((chatId: string): unknown | null => {
+    const Y = yjsRef.current
+    const doc = ydocRef.current
+    if (!Y || !doc) return null
+    const aiChatsMap = doc.getMap("aiChats")
+    let chatMap = aiChatsMap.get(chatId)
+    if (!chatMap || !(chatMap instanceof Y.Map)) {
+      // Create the chat map skeleton so the input Y.Text can exist
+      doc.transact(() => {
+        const newChat = new Y.Map()
+        newChat.set("input", new Y.Text())
+        aiChatsMap.set(chatId, newChat)
+        chatMap = newChat
+      })
+    }
+    let inputText = (chatMap as InstanceType<typeof Y.Map>).get("input")
+    if (!(inputText instanceof Y.Text)) {
+      doc.transact(() => {
+        const yt = new Y.Text()
+        ;(chatMap as InstanceType<typeof Y.Map>).set("input", yt)
+        inputText = yt
+      })
+    }
+    return inputText
+  }, [])
+
+  const sendAIChat = useCallback(
+    (opts: {
+      chatId: string
+      content: string
+      agentId: string
+      agentName: string
+      agentInstructions?: string
+    }) => {
+      const socket = socketRef.current
+      if (!socket) return
+      socket.emit("ai-chat", {
+        chatId: opts.chatId,
+        messageId: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        content: opts.content,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        agentId: opts.agentId,
+        agentName: opts.agentName,
+        agentInstructions: opts.agentInstructions,
+      })
+    },
+    [currentUser.id, currentUser.name]
+  )
+
+  const renameAIChat = useCallback(
+    (chatId: string, name: string) => {
+      const socket = socketRef.current
+      if (!socket) return
+      socket.emit("rename-chat", { chatId, name })
+    },
+    []
+  )
+
+  const deleteAIChat = useCallback(
+    (chatId: string) => {
+      const socket = socketRef.current
+      if (!socket) return
+      socket.emit("delete-chat", { chatId })
+    },
+    []
+  )
+
+  const aiOperationAction = useCallback(
+    (chatId: string, messageId: string, operationIndex: number, action: "accept" | "reject") => {
+      const socket = socketRef.current
+      if (!socket) return
+      socket.emit("ai-operation-action", { chatId, messageId, operationIndex, action })
+    },
+    []
+  )
+
+  const aiBulkAction = useCallback(
+    (chatId: string, messageId: string, action: "accept" | "reject") => {
+      const socket = socketRef.current
+      if (!socket) return
+      socket.emit("ai-bulk-action", { chatId, messageId, action })
+    },
+    []
+  )
+
+  const requestAIMerge = useCallback(
+    (opts: {
+      chatId: string
+      filePath: string
+      originalContent: string
+      versionA: string
+      versionB: string
+      contextA: string
+      contextB: string
+    }) => {
+      const socket = socketRef.current
+      if (!socket) return
+      socket.emit("ai-merge", opts)
+    },
+    []
+  )
+
+  const createAgent = useCallback(
+    (agent: { name: string; persona: string; systemPrompt: string; color: string }): string => {
+      const socket = socketRef.current
+      const id = `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      if (socket) {
+        socket.emit("create-agent", { ...agent, id, userId: currentUser.id })
+      }
+      return id
+    },
+    [currentUser.id]
+  )
+
+  const updateAgent = useCallback(
+    (id: string, updates: Partial<{ name: string; persona: string; systemPrompt: string; color: string; isActive: boolean }>) => {
+      const socket = socketRef.current
+      if (!socket) return
+      socket.emit("update-agent", { id, ...updates })
+    },
+    []
+  )
+
+  const deleteAgent = useCallback(
+    (id: string) => {
+      const socket = socketRef.current
+      if (!socket) return
+      socket.emit("delete-agent", { id })
+    },
+    []
+  )
+
+  const onAIStreamChunk = useCallback(
+    (handler: (data: { chatId: string; messageId: string; chunk: string; done?: boolean }) => void) => {
+      const socket = socketRef.current
+      if (!socket) return () => {}
+      socket.on("ai-chat-stream", handler)
+      return () => { socket.off("ai-chat-stream", handler) }
+    },
+    []
+  )
+
+  const onAIMergeResult = useCallback(
+    (handler: (data: { chatId: string; filePath: string; merged: string | null; explanation: string }) => void) => {
+      const socket = socketRef.current
+      if (!socket) return () => {}
+      socket.on("ai-merge-result", handler)
+      return () => { socket.off("ai-merge-result", handler) }
+    },
+    []
+  )
+
   return {
     connected,
     files,
@@ -534,6 +799,8 @@ export function useCollaboration({
     localClientId,
     meta,
     terminalSessions,
+    aiChatSessions,
+    aiAgents,
     getYdoc,
     getYText,
     getAwareness,
@@ -547,5 +814,17 @@ export function useCollaboration({
     deleteTerminalSession,
     sendTerminalInput,
     getTerminalInputYText,
+    getAIChatInputYText,
+    sendAIChat,
+    renameAIChat,
+    deleteAIChat,
+    aiOperationAction,
+    aiBulkAction,
+    requestAIMerge,
+    createAgent,
+    updateAgent,
+    deleteAgent,
+    onAIStreamChunk,
+    onAIMergeResult,
   }
 }

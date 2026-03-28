@@ -1,7 +1,20 @@
 "use client"
 
-import { useRef, useEffect, useState, useCallback } from "react"
-import type { FileNode } from "@/data/types"
+import { useRef, useEffect, useState, useCallback, useMemo } from "react"
+import { Check, X, Sparkles } from "lucide-react"
+import type { FileNode, FileOperation } from "@/data/types"
+import { cn } from "@/lib/utils"
+import { ScrollArea } from "@/components/ui/scroll-area"
+
+/** Pending AI operation on this file (from AI chat messages) */
+export interface AIBlock {
+  messageId: string
+  chatId: string
+  operationIndex: number
+  operation: FileOperation
+  status: "pending" | "accepted" | "rejected"
+  agentColor?: string
+}
 
 interface CodeEditorProps {
   file: FileNode
@@ -12,9 +25,220 @@ interface CodeEditorProps {
   awareness?: unknown
   /** Fallback for when Yjs binding is not available */
   onContentChange?: (content: string) => void
+  /** Pending AI operation blocks on this file */
+  aiBlocks?: AIBlock[]
+  /** Callback when user clicks accept/reject on an inline AI block */
+  onAIBlockAction?: (chatId: string, messageId: string, opIndex: number, action: "accept" | "reject") => void
 }
 
-export function CodeEditor({ file, readOnly = false, yText, awareness, onContentChange }: CodeEditorProps) {
+// ─── Diff Utilities ──────────────────────────────────────────────────────
+
+type DiffLine = { type: "unchanged" | "added" | "removed"; content: string }
+
+/**
+ * Compute a unified diff between two strings using LCS (Longest Common Subsequence).
+ * Returns an array of lines with their diff type.
+ */
+function computeUnifiedDiff(oldText: string, newText: string): DiffLine[] {
+  const oldLines = oldText.split("\n")
+  const newLines = newText.split("\n")
+  const n = oldLines.length
+  const m = newLines.length
+
+  // Build LCS DP table
+  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0))
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      dp[i][j] =
+        oldLines[i - 1] === newLines[j - 1]
+          ? dp[i - 1][j - 1] + 1
+          : Math.max(dp[i - 1][j], dp[i][j - 1])
+    }
+  }
+
+  // Backtrack to produce diff
+  const result: DiffLine[] = []
+  let i = n
+  let j = m
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+      result.unshift({ type: "unchanged", content: oldLines[i - 1] })
+      i--
+      j--
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      result.unshift({ type: "added", content: newLines[j - 1] })
+      j--
+    } else {
+      result.unshift({ type: "removed", content: oldLines[i - 1] })
+      i--
+    }
+  }
+
+  return result
+}
+
+// ─── Diff Overlay Component ──────────────────────────────────────────────
+
+function DiffOverlay({
+  block,
+  currentContent,
+  onAction,
+}: {
+  block: AIBlock
+  currentContent: string
+  onAction: (action: "accept" | "reject") => void
+}) {
+  const diffLines = useMemo(() => {
+    if (block.operation.type === "create") {
+      return (block.operation.content ?? "").split("\n").map((line) => ({
+        type: "added" as const,
+        content: line,
+      }))
+    }
+    if (block.operation.type === "delete") {
+      return currentContent.split("\n").map((line) => ({
+        type: "removed" as const,
+        content: line,
+      }))
+    }
+    return computeUnifiedDiff(currentContent, block.operation.content ?? "")
+  }, [block, currentContent])
+
+  const typeLabel =
+    block.operation.type === "create"
+      ? "New file"
+      : block.operation.type === "delete"
+        ? "Delete file"
+        : "Update file"
+
+  const addedCount = diffLines.filter((l) => l.type === "added").length
+  const removedCount = diffLines.filter((l) => l.type === "removed").length
+
+  // Line number counters for old/new
+  let oldLineNo = 0
+  let newLineNo = 0
+
+  return (
+    <div className="absolute inset-0 z-10 flex flex-col bg-[hsl(230,13%,7%)]/98 backdrop-blur-sm">
+      {/* Banner */}
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-ai-muted-border bg-ai-muted/40 shrink-0">
+        <Sparkles
+          className="h-4 w-4 shrink-0"
+          style={{ color: block.agentColor ?? "hsl(172, 66%, 50%)" }}
+        />
+        <span className="text-xs font-semibold text-ai">{typeLabel}</span>
+        <span className="text-xs text-text-tertiary font-mono truncate">{block.operation.path}</span>
+        <div className="flex-1" />
+        {addedCount > 0 && (
+          <span className="text-[10px] font-mono text-success">+{addedCount}</span>
+        )}
+        {removedCount > 0 && (
+          <span className="text-[10px] font-mono text-error">-{removedCount}</span>
+        )}
+        <button
+          onClick={() => onAction("accept")}
+          className="flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium bg-success/15 text-success hover:bg-success/25 border border-success/20 transition-colors"
+        >
+          <Check className="h-3 w-3" />
+          Accept
+        </button>
+        <button
+          onClick={() => onAction("reject")}
+          className="flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium bg-error/15 text-error hover:bg-error/25 border border-error/20 transition-colors"
+        >
+          <X className="h-3 w-3" />
+          Reject
+        </button>
+      </div>
+
+      {/* Diff content */}
+      <ScrollArea className="flex-1">
+        <div className="font-mono text-[13px] leading-[20px]">
+          {diffLines.map((line, i) => {
+            let leftNum = ""
+            let rightNum = ""
+            if (line.type === "unchanged") {
+              oldLineNo++
+              newLineNo++
+              leftNum = String(oldLineNo)
+              rightNum = String(newLineNo)
+            } else if (line.type === "removed") {
+              oldLineNo++
+              leftNum = String(oldLineNo)
+            } else {
+              newLineNo++
+              rightNum = String(newLineNo)
+            }
+
+            return (
+              <div
+                key={i}
+                className={cn(
+                  "flex",
+                  line.type === "added" && "bg-success/8",
+                  line.type === "removed" && "bg-error/8"
+                )}
+              >
+                {/* Left line number (old) */}
+                <span
+                  className={cn(
+                    "w-12 shrink-0 select-none text-right pr-1 text-[11px] leading-[20px]",
+                    line.type === "removed"
+                      ? "text-error/50"
+                      : line.type === "added"
+                        ? "text-transparent"
+                        : "text-text-tertiary/40"
+                  )}
+                >
+                  {leftNum}
+                </span>
+                {/* Right line number (new) */}
+                <span
+                  className={cn(
+                    "w-12 shrink-0 select-none text-right pr-2 text-[11px] leading-[20px]",
+                    line.type === "added"
+                      ? "text-success/50"
+                      : line.type === "removed"
+                        ? "text-transparent"
+                        : "text-text-tertiary/40"
+                  )}
+                >
+                  {rightNum}
+                </span>
+                {/* Prefix */}
+                <span
+                  className={cn(
+                    "w-5 shrink-0 select-none text-center",
+                    line.type === "added" && "text-success font-semibold",
+                    line.type === "removed" && "text-error font-semibold",
+                    line.type === "unchanged" && "text-text-tertiary/30"
+                  )}
+                >
+                  {line.type === "added" ? "+" : line.type === "removed" ? "−" : " "}
+                </span>
+                {/* Content */}
+                <span
+                  className={cn(
+                    "flex-1 whitespace-pre pr-4",
+                    line.type === "added" && "text-success/90",
+                    line.type === "removed" && "text-error/70 line-through decoration-error/30",
+                    line.type === "unchanged" && "text-text-secondary/70"
+                  )}
+                >
+                  {line.content}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      </ScrollArea>
+    </div>
+  )
+}
+
+// ─── Code Editor ─────────────────────────────────────────────────────────
+
+export function CodeEditor({ file, readOnly = false, yText, awareness, onContentChange, aiBlocks, onAIBlockAction }: CodeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [MonacoEditor, setMonacoEditor] = useState<typeof import("@monaco-editor/react").default | null>(null)
   /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -36,6 +260,9 @@ export function CodeEditor({ file, readOnly = false, yText, awareness, onContent
       bindingRef.current = null
     }
   }, [])
+
+  // Find the first pending AI block for this file
+  const pendingBlock = aiBlocks?.find((b) => b.status === "pending")
 
   const handleEditorMount = useCallback(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -83,7 +310,7 @@ export function CodeEditor({ file, readOnly = false, yText, awareness, onContent
   const useBinding = !!yText && !!awareness
 
   return (
-    <div ref={containerRef} className="h-full w-full">
+    <div ref={containerRef} className="h-full w-full relative">
       <MonacoEditor
         height="100%"
         language={file.language === "typescript" ? "typescript" : file.language}
@@ -156,6 +383,17 @@ export function CodeEditor({ file, readOnly = false, yText, awareness, onContent
         }}
         onMount={handleEditorMount}
       />
+
+      {/* AI Diff Overlay — renders on top of editor when there are pending changes */}
+      {pendingBlock && (
+        <DiffOverlay
+          block={pendingBlock}
+          currentContent={file.content}
+          onAction={(action) =>
+            onAIBlockAction?.(pendingBlock.chatId, pendingBlock.messageId, pendingBlock.operationIndex, action)
+          }
+        />
+      )}
     </div>
   )
 }

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useEffect, useRef } from "react"
+import { useState, useCallback, useEffect, useRef, useMemo } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import {
   PanelLeftClose,
@@ -31,12 +31,13 @@ import { Input } from "@/components/ui/input"
 import { ResizeHandle } from "@/components/ui/resize-handle"
 import { PresenceDock } from "./presence-dock"
 import { FileTree, getFileIcon } from "./file-tree"
-import { CodeEditor } from "./code-editor"
+import { CodeEditor, type AIBlock } from "./code-editor"
 import { TerminalPanel } from "./terminal-panel"
 import { CommandPalette } from "./command-palette"
 import { TimeTravelSlider } from "./time-travel-slider"
 import { AgentRoster } from "./agent-roster"
 import { AIInlinePrompt } from "./ai-inline-prompt"
+import { AIPanel } from "./ai-panel"
 import { NewFileDialog } from "./new-file-dialog"
 import { useCollaboration } from "@/lib/collaboration"
 import { cn } from "@/lib/utils"
@@ -109,6 +110,29 @@ export function WorkspaceShell({
 
   // Active terminal session
   const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null)
+
+  // AI streaming messages: messageId → accumulated text
+  const [streamingMessages, setStreamingMessages] = useState<Record<string, string>>({})
+
+  // Subscribe to AI stream chunks
+  useEffect(() => {
+    const unsub = collab.onAIStreamChunk((data: { chatId: string; messageId: string; chunk: string; done?: boolean }) => {
+      if (data.done) {
+        // Remove streaming entry once finalized
+        setStreamingMessages((prev) => {
+          const next = { ...prev }
+          delete next[data.messageId]
+          return next
+        })
+      } else {
+        setStreamingMessages((prev) => ({
+          ...prev,
+          [data.messageId]: (prev[data.messageId] ?? "") + data.chunk,
+        }))
+      }
+    })
+    return unsub
+  }, [collab])
 
   // Editable project info — initialised from project, then synced with collab.meta
   const [editingTitle, setEditingTitle] = useState(false)
@@ -234,6 +258,30 @@ export function WorkspaceShell({
     },
     []
   )
+
+  // ── Compute AI blocks for the currently open file ──
+  const activeFileAIBlocks = useMemo<AIBlock[]>(() => {
+    if (!activeFilePath) return []
+    const blocks: AIBlock[] = []
+    for (const session of collab.aiChatSessions) {
+      for (const msg of session.messages) {
+        if (msg.role !== "assistant" || !msg.operations) continue
+        msg.operations.forEach((op, idx) => {
+          if (op.path === activeFilePath || op.path === activeFilePath.replace(/^\//, "")) {
+            blocks.push({
+              messageId: msg.id,
+              chatId: session.id,
+              operationIndex: idx,
+              operation: op,
+              status: msg.operationStatuses?.[idx] ?? "pending",
+              agentColor: (collab.aiAgents.find(a => a.id === session.agentId) ?? agents.find(a => a.id === session.agentId))?.color,
+            })
+          }
+        })
+      }
+    }
+    return blocks
+  }, [activeFilePath, collab.aiChatSessions, collab.aiAgents, agents])
 
   return (
     <div className="flex h-full flex-col bg-background">
@@ -475,7 +523,7 @@ export function WorkspaceShell({
                       setTabContextMenu({ x: e.clientX, y: e.clientY, path: filePath })
                     }}
                     className={cn(
-                      "group flex cursor-pointer items-center gap-1.5 px-3 py-1 text-xs transition-colors border-r border-border-subtle",
+                      "group flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1 text-xs transition-colors",
                       isActive
                         ? "bg-elevated text-text-primary"
                         : "text-text-tertiary hover:bg-hover/50 hover:text-text-secondary"
@@ -529,6 +577,8 @@ export function WorkspaceShell({
                   yText={collab.getYText(activeFilePath)}
                   awareness={collab.getAwareness()}
                   onContentChange={(content) => collab.updateFileContent(activeFile.path, content)}
+                  aiBlocks={activeFileAIBlocks}
+                  onAIBlockAction={collab.aiOperationAction}
                 />
               </>
             ) : (
@@ -609,7 +659,7 @@ export function WorkspaceShell({
           </AnimatePresence>
         </div>
 
-        {/* Agent Roster Panel (resizable) */}
+        {/* AI Panel (resizable) */}
         {agentRosterOpen && (
           <>
             <ResizeHandle
@@ -620,9 +670,23 @@ export function WorkspaceShell({
               style={{ width: agentPanelWidth }}
               className="shrink-0 overflow-hidden border-l border-border-subtle bg-surface"
             >
-              <AgentRoster
-                agents={agents}
+              <AIPanel
+                agents={collab.aiAgents.length > 0 ? collab.aiAgents : agents}
+                chatSessions={collab.aiChatSessions}
+                presenceUsers={livePresence}
+                currentUserId={currentUser.id}
+                streamingMessages={streamingMessages}
                 onClose={() => setAgentRosterOpen(false)}
+                onSendChat={collab.sendAIChat}
+                onOperationAction={collab.aiOperationAction}
+                onBulkAction={collab.aiBulkAction}
+                onCreateAgent={collab.createAgent}
+                onUpdateAgent={collab.updateAgent}
+                onDeleteAgent={collab.deleteAgent}
+                onOpenFile={handleOpenFile}
+                onRenameChat={collab.renameAIChat}
+                onDeleteChat={collab.deleteAIChat}
+                getChatInputYText={collab.getAIChatInputYText}
               />
             </aside>
           </>
