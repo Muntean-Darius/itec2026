@@ -76,11 +76,21 @@ message: args.error instanceof Error ? args.error.message : String(args.error),
 }
 
 export function registerAiHandlers(
-io: Server<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>,
-socket: Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>,
-projectId: string,
+	io: Server<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>,
+	socket: Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>,
+	projectId: string,
 ): void {
-socket.on("ai:generate", async (payload: AiGenerateRequestPayload) => {
+	socket.on("ai:proposal-action", (payload) => {
+		io.to(projectId).emit("ai:proposal-action", {
+			from: socket.id,
+			requestId: payload.requestId,
+			action: payload.action,
+			appliedCode: payload.appliedCode,
+			timestamp: now(),
+		});
+	});
+
+	socket.on("ai:generate", async (payload: AiGenerateRequestPayload) => {
 try {
 validateGeneratePayload(payload);
 emitAiState(io, projectId, {

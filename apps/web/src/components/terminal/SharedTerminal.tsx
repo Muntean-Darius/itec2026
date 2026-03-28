@@ -9,12 +9,15 @@ import { ChevronDown, ChevronUp, Maximize2, Trash2 } from "lucide-react"
 interface SharedTerminalProps {
   output?: string[]
   defaultOpen?: boolean
+  onCommand?: (command: string) => void
 }
 
-export function SharedTerminal({ output = [], defaultOpen = true }: SharedTerminalProps) {
+export function SharedTerminal({ output = [], defaultOpen = true, onCommand }: SharedTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
+  const inputBufferRef = useRef("")
+  const renderedOutputCountRef = useRef(0)
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const [activeTab, setActiveTab] = useState<"terminal" | "output">("terminal")
 
@@ -48,7 +51,7 @@ export function SharedTerminal({ output = [], defaultOpen = true }: SharedTermin
       lineHeight: 1.6,
       cursorBlink:  true,
       cursorStyle:  "block",
-      disableStdin: true,
+      disableStdin: false,
       scrollback:   2000,
       convertEol:   true,
     })
@@ -60,6 +63,41 @@ export function SharedTerminal({ output = [], defaultOpen = true }: SharedTermin
 
     term.writeln("\x1b[34m$\x1b[0m Session started")
     term.writeln("")
+    term.write("\x1b[34m$\x1b[0m ")
+    renderedOutputCountRef.current = 0
+
+    term.onData((data) => {
+      if (data === "\r") {
+        const command = inputBufferRef.current.trim()
+        term.writeln("")
+        if (command) {
+          onCommand?.(command)
+        }
+        inputBufferRef.current = ""
+        term.write("\x1b[34m$\x1b[0m ")
+        return
+      }
+
+      if (data === "\u007f") {
+        if (inputBufferRef.current.length > 0) {
+          inputBufferRef.current = inputBufferRef.current.slice(0, -1)
+          term.write("\b \b")
+        }
+        return
+      }
+
+      if (data === "\u0003") {
+        inputBufferRef.current = ""
+        term.writeln("^C")
+        term.write("\x1b[34m$\x1b[0m ")
+        return
+      }
+
+      if (data >= " " && data !== "\u007f") {
+        inputBufferRef.current += data
+        term.write(data)
+      }
+    })
 
     termRef.current     = term
     fitAddonRef.current = fitAddon
@@ -81,11 +119,22 @@ export function SharedTerminal({ output = [], defaultOpen = true }: SharedTermin
 
   useEffect(() => {
     if (!termRef.current || output.length === 0) return
-    termRef.current.writeln(output[output.length - 1])
+    const startIndex = Math.max(renderedOutputCountRef.current, 0)
+    const nextLines = output.slice(startIndex)
+    if (nextLines.length === 0) return
+
+    for (const line of nextLines) {
+      termRef.current.writeln(line)
+    }
+
+    renderedOutputCountRef.current = output.length
+    termRef.current.write("\x1b[34m$\x1b[0m ")
   }, [output])
 
   function clearTerminal() {
     termRef.current?.clear()
+    renderedOutputCountRef.current = output.length
+    termRef.current?.write("\x1b[34m$\x1b[0m ")
   }
 
   return (
