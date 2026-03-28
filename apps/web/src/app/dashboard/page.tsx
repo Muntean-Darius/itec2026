@@ -1,12 +1,14 @@
-import { getProjects, getCurrentUser } from "@/data/mock"
+import { redirect } from "next/navigation"
+import { getProjects, getCurrentUser, getAuthUser } from "@/data/queries"
 import { DashboardShell } from "@/components/dashboard/dashboard-shell"
 
-// RSC page — this will be a server component that fetches data directly
-// In production: const user = await prisma.user.findUnique(...)
-// In production: const projects = await prisma.project.findMany(...)
-
 export default async function DashboardPage() {
+  const authUser = await getAuthUser()
+  if (!authUser) redirect("/login")
+  if (!authUser.onboardingComplete) redirect("/onboarding")
+
   const [user, projects] = await Promise.all([getCurrentUser(), getProjects()])
+  if (!user) redirect("/login")
 
   return <DashboardShell user={user} projects={projects} />
 }

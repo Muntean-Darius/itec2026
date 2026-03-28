@@ -1,0 +1,26 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// iTECify — Server Prisma Schema (Snapshot model only)
+// Maps to the same snapshots table used by the web app.
+// ═══════════════════════════════════════════════════════════════════════════
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Snapshot {
+  id          String   @id @default(uuid()) @db.Uuid
+  label       String?
+  changeCount Int      @default(0) @map("change_count")
+  blob        Bytes
+  createdAt   DateTime @default(now()) @map("created_at")
+  projectId   String   @map("project_id") @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+
+  @@index([projectId, createdAt])
+  @@map("snapshots")
+}

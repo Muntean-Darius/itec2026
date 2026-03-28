@@ -1,10 +1,6 @@
-import { notFound } from "next/navigation"
-import { getProject, getProjectFiles, getPresence, getAgents, getSnapshots } from "@/data/mock"
-import { getCurrentUser } from "@/data/mock"
+import { redirect, notFound } from "next/navigation"
+import { getProject, getProjectFiles, getAgents, getSnapshots, getCurrentUser, getAuthUser } from "@/data/queries"
 import { WorkspaceShell } from "@/components/workspace/workspace-shell"
-
-// RSC page — fetches all workspace data server-side
-// In production: all these would be Prisma queries
 
 interface WorkspacePageProps {
   params: Promise<{ projectId: string }>
@@ -13,22 +9,24 @@ interface WorkspacePageProps {
 export default async function WorkspacePage({ params }: WorkspacePageProps) {
   const { projectId } = await params
 
-  const [project, files, presence, user, agents, snapshots] = await Promise.all([
+  const authUser = await getAuthUser()
+  if (!authUser) redirect("/login")
+
+  const [project, files, user, agents, snapshots] = await Promise.all([
     getProject(projectId),
     getProjectFiles(projectId),
-    getPresence(projectId),
     getCurrentUser(),
     getAgents(projectId),
     getSnapshots(projectId),
   ])
 
-  if (!project) notFound()
+  if (!project || !user) notFound()
 
   return (
     <WorkspaceShell
       project={project}
       initialFiles={files}
-      initialPresence={presence}
+      initialPresence={[]}
       currentUser={user}
       agents={agents}
       snapshots={snapshots}

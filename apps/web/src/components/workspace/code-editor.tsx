@@ -6,11 +6,21 @@ import type { FileNode } from "@/data/types"
 interface CodeEditorProps {
   file: FileNode
   readOnly?: boolean
+  /** Y.Text instance for this file (from collab hook) */
+  yText?: unknown
+  /** Yjs Awareness instance (from collab hook) */
+  awareness?: unknown
+  /** Fallback for when Yjs binding is not available */
+  onContentChange?: (content: string) => void
 }
 
-export function CodeEditor({ file, readOnly = false }: CodeEditorProps) {
+export function CodeEditor({ file, readOnly = false, yText, awareness, onContentChange }: CodeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [MonacoEditor, setMonacoEditor] = useState<typeof import("@monaco-editor/react").default | null>(null)
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  const bindingRef = useRef<any>(null)
+  const editorRef = useRef<any>(null)
+  /* eslint-enable @typescript-eslint/no-explicit-any */
 
   useEffect(() => {
     // Dynamic import to avoid SSR issues
@@ -19,14 +29,37 @@ export function CodeEditor({ file, readOnly = false }: CodeEditorProps) {
     })
   }, [])
 
-  const handleEditorMount = useCallback((editor: unknown) => {
-    // In production: bind Yjs document to this Monaco instance via y-monaco
-    // import { MonacoBinding } from 'y-monaco'
-    // const ydoc = getYjsDocument(projectId)
-    // const ytext = ydoc.getText(file.path)
-    // new MonacoBinding(ytext, editor.getModel(), new Set([editor]), awareness)
-    void editor
+  // Cleanup binding on unmount
+  useEffect(() => {
+    return () => {
+      bindingRef.current?.destroy()
+      bindingRef.current = null
+    }
   }, [])
+
+  const handleEditorMount = useCallback(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (editor: any) => {
+      editorRef.current = editor
+
+      // If we have a Y.Text, create a y-monaco binding for real-time CRDT sync
+      if (yText && awareness) {
+        import("y-monaco").then(({ MonacoBinding }) => {
+          if (!editor.getModel()) return
+          bindingRef.current = new MonacoBinding(
+            yText as any, // Y.Text
+            editor.getModel()!,
+            new Set([editor]),
+            awareness as any // Awareness
+          )
+        }).catch(() => {
+          // Fallback: if y-monaco fails, use the value prop approach
+          console.warn("[iTECify] y-monaco binding failed, using fallback")
+        })
+      }
+    },
+    [yText, awareness]
+  )
 
   if (!MonacoEditor) {
     // Skeleton loading state per design guidelines
@@ -45,12 +78,16 @@ export function CodeEditor({ file, readOnly = false }: CodeEditorProps) {
     )
   }
 
+  // When using y-monaco binding, don't use value/onChange (the binding handles sync).
+  // Only use controlled mode as a fallback when no Y.Text is available.
+  const useBinding = !!yText && !!awareness
+
   return (
     <div ref={containerRef} className="h-full w-full">
       <MonacoEditor
         height="100%"
         language={file.language === "typescript" ? "typescript" : file.language}
-        value={file.content}
+        {...(useBinding ? {} : { value: file.content })}
         theme="itecify-dark"
         options={{
           readOnly,
@@ -110,6 +147,12 @@ export function CodeEditor({ file, readOnly = false }: CodeEditorProps) {
               "editorBracketMatch.border": "#6366f1",
             },
           })
+        }}
+        onChange={(value) => {
+          // Only fire callback when NOT using y-monaco binding (fallback mode)
+          if (!useBinding && value !== undefined && onContentChange) {
+            onContentChange(value)
+          }
         }}
         onMount={handleEditorMount}
       />

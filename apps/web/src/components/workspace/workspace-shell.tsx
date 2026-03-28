@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useEffect } from "react"
+import { useState, useCallback, useEffect, useRef } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import {
   PanelLeftClose,
@@ -12,12 +12,20 @@ import {
   Share2,
   ArrowLeft,
   History,
+  Pencil,
+  Check,
+  X,
+  Copy,
+  CheckCheck,
 } from "lucide-react"
 import Link from "next/link"
 import type { User, Project, FileNode, PresenceUser, AIAgent, Snapshot } from "@/data/types"
+import { updateProject } from "@/app/actions"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
 import { Separator } from "@/components/ui/separator"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
 import { ResizeHandle } from "@/components/ui/resize-handle"
 import { PresenceDock } from "./presence-dock"
 import { FileTree } from "./file-tree"
@@ -27,8 +35,8 @@ import { CommandPalette } from "./command-palette"
 import { TimeTravelSlider } from "./time-travel-slider"
 import { AgentRoster } from "./agent-roster"
 import { AIInlinePrompt } from "./ai-inline-prompt"
-import { CollaborationCursors } from "./collaboration-cursors"
 import { NewFileDialog } from "./new-file-dialog"
+import { useCollaboration } from "@/lib/collaboration"
 
 interface WorkspaceShellProps {
   project: Project
@@ -58,14 +66,23 @@ export function WorkspaceShell({
   agents,
   snapshots,
 }: WorkspaceShellProps) {
-  // File state
-  const [files, setFiles] = useState<FileNode[]>(initialFiles)
+  // Real-time collaboration
+  const collab = useCollaboration({
+    projectId: project.id,
+    currentUser,
+    initialFiles,
+  })
+
+  // Use collab files + presence, with initialPresence as fallback
+  const files = collab.files.length > 0 ? collab.files : initialFiles
+  const livePresence = collab.presence.length > 0 ? collab.presence : initialPresence
+
   const [activeFilePath, setActiveFilePath] = useState<string>(
     initialFiles[0]?.path ?? ""
   )
-  const [openFiles, setOpenFiles] = useState<string[]>([
-    initialFiles[0]?.path ?? "",
-  ])
+  const [openFiles, setOpenFiles] = useState<string[]>(
+    initialFiles.length > 0 ? [initialFiles[0].path] : []
+  )
 
   // Panel toggles
   const [sidebarOpen, setSidebarOpen] = useState(true)
@@ -83,15 +100,101 @@ export function WorkspaceShell({
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [aiPromptOpen, setAiPromptOpen] = useState(false)
   const [newFileDialogOpen, setNewFileDialogOpen] = useState(false)
+  const [shareDialogOpen, setShareDialogOpen] = useState(false)
+  const [linkCopied, setLinkCopied] = useState(false)
+
+  // Active terminal session
+  const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null)
+
+  // Editable project info — initialised from project, then synced with collab.meta
+  const [editingTitle, setEditingTitle] = useState(false)
+  const [projectName, setProjectName] = useState(project.name)
+  const [projectDescription, setProjectDescription] = useState(project.description ?? "")
+  const titleInputRef = useRef<HTMLInputElement>(null)
+
+  // Sync meta from Yjs → local state (only when NOT editing)
+  useEffect(() => {
+    if (!editingTitle && collab.meta.name) {
+      setProjectName(collab.meta.name)
+    }
+  }, [collab.meta.name, editingTitle])
+
+  useEffect(() => {
+    if (!editingTitle && collab.meta.description !== undefined) {
+      setProjectDescription(collab.meta.description)
+    }
+  }, [collab.meta.description, editingTitle])
+
+  // Auto-select first terminal session
+  useEffect(() => {
+    if (collab.terminalSessions.length > 0 && !activeTerminalId) {
+      setActiveTerminalId(collab.terminalSessions[0].id)
+    }
+    // If active session was deleted, select first remaining
+    if (activeTerminalId && !collab.terminalSessions.find(s => s.id === activeTerminalId)) {
+      setActiveTerminalId(collab.terminalSessions[0]?.id ?? null)
+    }
+  }, [collab.terminalSessions, activeTerminalId])
+
+  // Terminal draft awareness: extract other users' draft text from presence
+  const terminalDrafts = livePresence
+    .filter((p) => {
+      const userId = p.id.split(":")[0]
+      return userId !== currentUser.id
+    })
+    .map((p) => ({
+      userId: p.id,
+      name: p.name,
+      cursorColor: p.cursorColor,
+      sessionId: p.terminalSessionId ?? "",
+      text: p.terminalDraft ?? "",
+    }))
+    .filter((d) => d.sessionId && d.text)
+
+  const handleTerminalDraftChange = useCallback(
+    (sessionId: string, text: string) => {
+      collab.updateAwareness({
+        terminalSessionId: sessionId,
+        terminalDraft: text,
+      } as Record<string, unknown>)
+    },
+    [collab]
+  )
 
   const activeFile = files.find((f) => f.path === activeFilePath)
+
+  const handleSaveTitle = useCallback(async () => {
+    if (!projectName.trim()) {
+      setProjectName(project.name)
+      setEditingTitle(false)
+      return
+    }
+    setEditingTitle(false)
+    // Sync to Yjs (real-time to other tabs)
+    collab.updateMeta("name", projectName.trim())
+    collab.updateMeta("description", projectDescription.trim())
+    // Persist to DB
+    const formData = new FormData()
+    formData.set("projectId", project.id)
+    formData.set("name", projectName.trim())
+    formData.set("description", projectDescription.trim())
+    await updateProject(formData)
+  }, [project.id, project.name, projectName, projectDescription, collab])
+
+  useEffect(() => {
+    if (editingTitle && titleInputRef.current) {
+      titleInputRef.current.focus()
+      titleInputRef.current.select()
+    }
+  }, [editingTitle])
 
   const handleOpenFile = useCallback(
     (path: string) => {
       setActiveFilePath(path)
       setOpenFiles((prev) => (prev.includes(path) ? prev : [...prev, path]))
+      collab.updateAwareness({ activeFile: path })
     },
-    []
+    [collab]
   )
 
   const handleCloseTab = useCallback(
@@ -115,26 +218,11 @@ export function WorkspaceShell({
 
   const handleCreateFile = useCallback(
     (path: string) => {
-      const ext = path.split(".").pop() ?? ""
-      const langMap: Record<string, string> = {
-        ts: "typescript",
-        tsx: "typescript",
-        js: "javascript",
-        jsx: "javascript",
-        json: "json",
-        css: "css",
-        md: "markdown",
-        html: "html",
-      }
-      const newFile: FileNode = {
-        path: path.startsWith("/") ? path : "/" + path,
-        content: "",
-        language: langMap[ext] ?? "plaintext",
-      }
-      setFiles((prev) => [...prev, newFile])
-      handleOpenFile(newFile.path)
+      const normalizedPath = path.startsWith("/") ? path : "/" + path
+      collab.createFile(normalizedPath)
+      handleOpenFile(normalizedPath)
     },
-    [handleOpenFile]
+    [handleOpenFile, collab]
   )
 
   // Resize handlers
@@ -162,7 +250,7 @@ export function WorkspaceShell({
   return (
     <div className="flex h-full flex-col bg-background">
       {/* ─── Top Bar ─── */}
-      <header className="flex h-11 shrink-0 items-center justify-between border-b border-border-subtle px-3">
+      <header className="grid h-11 shrink-0 grid-cols-[1fr_auto_1fr] items-center border-b border-border-subtle px-3">
         <div className="flex items-center gap-2">
           <Tooltip>
             <TooltipTrigger asChild>
@@ -177,9 +265,92 @@ export function WorkspaceShell({
 
           <Separator orientation="vertical" className="h-5" />
 
-          <span className="text-sm font-medium text-text-primary truncate max-w-[200px]">
-            {project.name}
-          </span>
+          {/* Connection indicator */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div
+                className={`h-2 w-2 rounded-full transition-colors ${
+                  collab.connected
+                    ? "bg-success"
+                    : "bg-warning animate-pulse"
+                }`}
+              />
+            </TooltipTrigger>
+            <TooltipContent>
+              {collab.connected ? "Connected — real-time sync active" : "Reconnecting..."}
+            </TooltipContent>
+          </Tooltip>
+
+          {editingTitle ? (
+            <div className="flex items-center gap-1.5">
+              <input
+                ref={titleInputRef}
+                value={projectName}
+                onChange={(e) => setProjectName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSaveTitle()
+                  if (e.key === "Escape") {
+                    setProjectName(project.name)
+                    setProjectDescription(project.description ?? "")
+                    setEditingTitle(false)
+                  }
+                }}
+                className="h-6 w-40 rounded border border-border-default bg-elevated px-2 text-sm font-medium text-text-primary outline-none focus:border-brand"
+                placeholder="Project name"
+              />
+              <input
+                value={projectDescription}
+                onChange={(e) => setProjectDescription(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSaveTitle()
+                  if (e.key === "Escape") {
+                    setProjectName(project.name)
+                    setProjectDescription(project.description ?? "")
+                    setEditingTitle(false)
+                  }
+                }}
+                className="h-6 w-44 rounded border border-border-default bg-elevated px-2 text-xs text-text-secondary outline-none focus:border-brand"
+                placeholder="Description (optional)"
+              />
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                onClick={handleSaveTitle}
+              >
+                <Check className="h-3 w-3 text-success" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                onClick={() => {
+                  setProjectName(project.name)
+                  setProjectDescription(project.description ?? "")
+                  setEditingTitle(false)
+                }}
+              >
+                <X className="h-3 w-3 text-text-tertiary" />
+              </Button>
+            </div>
+          ) : (
+            <button
+              className="group flex items-center gap-1.5 rounded-md px-1 py-0.5 transition-colors hover:bg-hover"
+              onClick={() => setEditingTitle(true)}
+            >
+              <div className="flex flex-col">
+                <span className="text-sm font-medium text-text-primary truncate max-w-[200px]">
+                  {projectName}
+                </span>
+                {projectDescription && (
+                  <span className="text-[10px] text-text-tertiary truncate max-w-[200px]">
+                    {projectDescription}
+                  </span>
+                )}
+              </div>
+              <Pencil className="h-3 w-3 text-text-tertiary opacity-0 group-hover:opacity-100 transition-opacity" />
+            </button>
+          )}
         </div>
 
         {/* Center: Run button */}
@@ -205,7 +376,7 @@ export function WorkspaceShell({
         </div>
 
         {/* Right: Actions + Presence */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center justify-end gap-2">
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -222,7 +393,15 @@ export function WorkspaceShell({
 
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-7 w-7">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={() => {
+                  setShareDialogOpen(true)
+                  setLinkCopied(false)
+                }}
+              >
                 <Share2 className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
@@ -232,7 +411,7 @@ export function WorkspaceShell({
           <Separator orientation="vertical" className="h-5" />
 
           <PresenceDock
-            users={initialPresence}
+            users={livePresence}
             currentUser={currentUser}
             onToggleAgentRoster={() => setAgentRosterOpen(!agentRosterOpen)}
           />
@@ -251,9 +430,12 @@ export function WorkspaceShell({
               <FileTree
                 files={files}
                 activeFilePath={activeFilePath}
-                presence={initialPresence}
+                presence={livePresence}
                 onOpenFile={handleOpenFile}
                 onNewFile={() => setNewFileDialogOpen(true)}
+                onDeleteFile={(path) => collab.deleteFile(path)}
+                onRenameFile={(oldPath, newPath) => collab.renameFile(oldPath, newPath)}
+                onCreateFile={handleCreateFile}
               />
             </aside>
             <ResizeHandle
@@ -293,10 +475,14 @@ export function WorkspaceShell({
                 const isActive = filePath === activeFilePath
                 const fileName = filePath.split("/").pop()
                 return (
-                  <button
+                  <div
                     key={filePath}
+                    role="tab"
+                    tabIndex={0}
+                    aria-selected={isActive}
                     onClick={() => setActiveFilePath(filePath)}
-                    className={`group flex items-center gap-1.5 rounded-md px-3 py-1 text-xs transition-colors ${
+                    onKeyDown={(e) => { if (e.key === "Enter") setActiveFilePath(filePath) }}
+                    className={`group flex cursor-pointer items-center gap-1.5 rounded-md px-3 py-1 text-xs transition-colors ${
                       isActive
                         ? "bg-elevated text-text-primary"
                         : "text-text-secondary hover:bg-hover hover:text-text-primary"
@@ -312,7 +498,7 @@ export function WorkspaceShell({
                     >
                       <span className="text-[10px] leading-none px-0.5">✕</span>
                     </button>
-                  </button>
+                  </div>
                 )
               })}
             </div>
@@ -343,14 +529,12 @@ export function WorkspaceShell({
             {activeFile ? (
               <>
                 <CodeEditor
+                  key={activeFilePath}
                   file={activeFile}
                   readOnly={timeTravelActive}
-                />
-                {/* Collaboration cursors overlay */}
-                <CollaborationCursors
-                  presence={initialPresence}
-                  currentUserId={currentUser.id}
-                  activeFilePath={activeFilePath}
+                  yText={collab.getYText(activeFilePath)}
+                  awareness={collab.getAwareness()}
+                  onContentChange={(content) => collab.updateFileContent(activeFile.path, content)}
                 />
               </>
             ) : (
@@ -398,7 +582,22 @@ export function WorkspaceShell({
                 style={{ height: terminalHeight }}
                 className="shrink-0 overflow-hidden border-t border-border-subtle"
               >
-                <TerminalPanel isRunning={isRunning} />
+                <TerminalPanel
+                  isRunning={isRunning}
+                  sessions={collab.terminalSessions}
+                  activeSessionId={activeTerminalId}
+                  onSelectSession={setActiveTerminalId}
+                  onCreateSession={() => {
+                    const newId = collab.createTerminalSession()
+                    if (newId) setActiveTerminalId(newId)
+                  }}
+                  onDeleteSession={(id) => collab.deleteTerminalSession(id)}
+                  onInput={(content) => {
+                    if (activeTerminalId) collab.sendTerminalInput(activeTerminalId, content)
+                  }}
+                  terminalDrafts={terminalDrafts}
+                  onDraftChange={handleTerminalDraftChange}
+                />
               </div>
             </>
           )}
@@ -433,6 +632,48 @@ export function WorkspaceShell({
           </>
         )}
       </div>
+
+      {/* Share / Invite Dialog */}
+      <Dialog open={shareDialogOpen} onOpenChange={setShareDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Share workspace</DialogTitle>
+            <DialogDescription>
+              Anyone with this link can join <strong>{project.name}</strong> as a collaborator.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex items-center gap-2">
+            <Input
+              readOnly
+              value={typeof window !== "undefined" ? `${window.location.origin}/workspace/join/${project.id}` : ""}
+              className="flex-1 text-sm"
+              onFocus={(e) => e.target.select()}
+            />
+            <Button
+              variant="default"
+              size="sm"
+              className="shrink-0 gap-1.5"
+              onClick={() => {
+                navigator.clipboard.writeText(`${window.location.origin}/workspace/join/${project.id}`)
+                setLinkCopied(true)
+                setTimeout(() => setLinkCopied(false), 2000)
+              }}
+            >
+              {linkCopied ? (
+                <>
+                  <CheckCheck className="h-4 w-4" />
+                  Copied
+                </>
+              ) : (
+                <>
+                  <Copy className="h-4 w-4" />
+                  Copy
+                </>
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Command Palette (Cmd+K) */}
       <CommandPalette

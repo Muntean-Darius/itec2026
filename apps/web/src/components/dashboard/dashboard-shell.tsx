@@ -16,7 +16,7 @@ import {
   FolderOpen,
 } from "lucide-react"
 import type { User, Project } from "@/data/types"
-import { signOut } from "@/app/actions"
+import { signOut, createProject } from "@/app/actions"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -82,6 +82,7 @@ export function DashboardShell({ user, projects }: DashboardShellProps) {
   const [search, setSearch] = useState("")
   const [showNewProject, setShowNewProject] = useState(false)
   const [newProjectName, setNewProjectName] = useState("")
+  const [newProjectDesc, setNewProjectDesc] = useState("")
 
   const filtered = projects.filter(
     (p) =>
@@ -117,8 +118,10 @@ export function DashboardShell({ user, projects }: DashboardShellProps) {
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuItem>
-                <Settings className="mr-2 h-4 w-4" /> Settings
+              <DropdownMenuItem asChild>
+                <a href="/settings">
+                  <Settings className="mr-2 h-4 w-4" /> Settings
+                </a>
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem className="text-error" onClick={() => signOut()}>
@@ -211,30 +214,50 @@ export function DashboardShell({ user, projects }: DashboardShellProps) {
               collaborators after creating the workspace.
             </DialogDescription>
           </DialogHeader>
-          <div className="py-4">
-            <Input
-              placeholder="Workspace name"
-              value={newProjectName}
-              onChange={(e) => setNewProjectName(e.target.value)}
-              autoFocus
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setShowNewProject(false)}>
-              Cancel
-            </Button>
-            <Button
-              disabled={!newProjectName.trim()}
-              onClick={() => {
-                // RSC: Server Action to create project
-                // await createProject({ name: newProjectName })
-                setShowNewProject(false)
-                setNewProjectName("")
-              }}
-            >
-              Create workspace
-            </Button>
-          </DialogFooter>
+          <form
+            action={async (formData: FormData) => {
+              await createProject(formData)
+              setShowNewProject(false)
+              setNewProjectName("")
+              setNewProjectDesc("")
+            }}
+            className="space-y-4 py-4"
+          >
+            <div className="space-y-2">
+              <label htmlFor="project-name" className="text-sm font-medium text-text-secondary">
+                Name
+              </label>
+              <Input
+                id="project-name"
+                name="name"
+                placeholder="Workspace name"
+                value={newProjectName}
+                onChange={(e) => setNewProjectName(e.target.value)}
+                autoFocus
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <label htmlFor="project-desc" className="text-sm font-medium text-text-secondary">
+                Description <span className="text-text-tertiary">(optional)</span>
+              </label>
+              <Input
+                id="project-desc"
+                name="description"
+                placeholder="What's this workspace about?"
+                value={newProjectDesc}
+                onChange={(e) => setNewProjectDesc(e.target.value)}
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="ghost" type="button" onClick={() => setShowNewProject(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={!newProjectName.trim()}>
+                Create workspace
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
     </div>

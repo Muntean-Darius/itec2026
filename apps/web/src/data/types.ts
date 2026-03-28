@@ -38,6 +38,9 @@ export interface PresenceUser extends User {
   cursorPosition: { line: number; column: number } | null
   isTyping: boolean
   isOnline: boolean
+  /** Terminal draft sharing */
+  terminalSessionId?: string
+  terminalDraft?: string
 }
 
 export interface AIAgent {

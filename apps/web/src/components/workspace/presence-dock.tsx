@@ -28,7 +28,15 @@ export function PresenceDock({
   currentUser,
   onToggleAgentRoster,
 }: PresenceDockProps) {
-  const otherUsers = users.filter((u) => u.id !== currentUser.id)
+  // Filter out the current user (id format is "userId:clientId") and deduplicate by userId
+  const seenUserIds = new Set<string>()
+  const otherUsers = users.filter((u) => {
+    const userId = u.id.split(":")[0]
+    if (userId === currentUser.id) return false
+    if (seenUserIds.has(userId)) return false
+    seenUserIds.add(userId)
+    return true
+  })
 
   return (
     <div className="flex items-center gap-1.5">

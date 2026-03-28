@@ -32,6 +32,9 @@ interface FileTreeProps {
   presence: PresenceUser[]
   onOpenFile: (path: string) => void
   onNewFile?: () => void
+  onDeleteFile?: (path: string) => void
+  onRenameFile?: (oldPath: string, newPath: string) => void
+  onCreateFile?: (path: string) => void
 }
 
 type TreeNode = {
@@ -54,9 +57,17 @@ interface ContextMenuState {
 function FileContextMenu({
   state,
   onClose,
+  onDelete,
+  onRename,
+  onDuplicate,
+  onNewFileInFolder,
 }: {
   state: ContextMenuState
   onClose: () => void
+  onDelete?: (path: string) => void
+  onRename?: (oldPath: string) => void
+  onDuplicate?: (path: string) => void
+  onNewFileInFolder?: (folderPath: string) => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
 
@@ -96,6 +107,38 @@ function FileContextMenu({
         { icon: Trash2, label: "Delete", shortcut: "Del", destructive: true },
       ]
 
+  const handleAction = (label: string) => {
+    switch (label) {
+      case "Copy Path":
+        navigator.clipboard?.writeText(state.path)
+        break
+      case "Delete":
+        if (onDelete && confirm(`Delete ${state.path}?`)) {
+          onDelete(state.path)
+        }
+        break
+      case "Rename":
+        onRename?.(state.path)
+        break
+      case "Duplicate":
+        onDuplicate?.(state.path)
+        break
+      case "New File":
+        onNewFileInFolder?.(state.path)
+        break
+      case "New Folder": {
+        const folderName = prompt("Folder name:")
+        if (folderName?.trim()) {
+          const folderPath = `${state.path}/${folderName.trim()}`
+          // Create a .gitkeep to materialize the folder
+          onNewFileInFolder?.(folderPath)
+        }
+        break
+      }
+    }
+    onClose()
+  }
+
   return (
     <motion.div
       ref={ref}
@@ -119,13 +162,7 @@ function FileContextMenu({
         return (
           <button
             key={item.label}
-            onClick={() => {
-              // Mock action — in production these would modify the Yjs flat map
-              if (item.label === "Copy Path") {
-                navigator.clipboard?.writeText(state.path)
-              }
-              onClose()
-            }}
+            onClick={() => handleAction(item.label!)}
             className={cn(
               "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs transition-colors",
               item.destructive
@@ -209,12 +246,16 @@ export function FileTree({
   presence,
   onOpenFile,
   onNewFile,
+  onDeleteFile,
+  onRenameFile,
+  onCreateFile,
 }: FileTreeProps) {
   const [search, setSearch] = useState("")
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(
     new Set(["/src", "/src/components", "/src/utils"])
   )
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+  const [renamingPath, setRenamingPath] = useState<string | null>(null)
 
   const tree = useMemo(() => buildTree(files), [files])
 
@@ -242,6 +283,42 @@ export function FileTree({
       setContextMenu({ x: e.clientX, y: e.clientY, path, isDir })
     },
     []
+  )
+
+  const handleRename = useCallback(
+    (oldPath: string) => {
+      const name = oldPath.split("/").pop()!
+      const newName = prompt("Rename to:", name)
+      if (newName?.trim() && newName.trim() !== name) {
+        const parentPath = oldPath.substring(0, oldPath.lastIndexOf("/"))
+        const newPath = `${parentPath}/${newName.trim()}`
+        onRenameFile?.(oldPath, newPath)
+      }
+    },
+    [onRenameFile]
+  )
+
+  const handleDuplicate = useCallback(
+    (path: string) => {
+      const file = files.find((f) => f.path === path)
+      if (!file) return
+      const ext = path.includes(".") ? path.substring(path.lastIndexOf(".")) : ""
+      const base = ext ? path.substring(0, path.lastIndexOf(".")) : path
+      const newPath = `${base} (copy)${ext}`
+      onCreateFile?.(newPath)
+    },
+    [files, onCreateFile]
+  )
+
+  const handleNewFileInFolder = useCallback(
+    (folderPath: string) => {
+      const fileName = prompt("File name:", "new-file.ts")
+      if (fileName?.trim()) {
+        const newPath = `${folderPath}/${fileName.trim()}`
+        onCreateFile?.(newPath)
+      }
+    },
+    [onCreateFile]
   )
 
   return (
@@ -312,6 +389,10 @@ export function FileTree({
           <FileContextMenu
             state={contextMenu}
             onClose={() => setContextMenu(null)}
+            onDelete={onDeleteFile}
+            onRename={handleRename}
+            onDuplicate={handleDuplicate}
+            onNewFileInFolder={handleNewFileInFolder}
           />
         )}
       </AnimatePresence>
