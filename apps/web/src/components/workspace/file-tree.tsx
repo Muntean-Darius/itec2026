@@ -35,16 +35,18 @@ import {
   AlertDialogCancel,
 } from "@/components/ui/alert-dialog"
 import { cn } from "@/lib/utils"
+import { toast } from "sonner"
 
 interface FileTreeProps {
   files: FileNode[]
   activeFilePath: string
   presence: PresenceUser[]
   onOpenFile: (path: string) => void
-  onNewFile?: () => void
   onDeleteFile?: (path: string) => void
   onRenameFile?: (oldPath: string, newPath: string) => void
   onCreateFile?: (path: string) => void
+  /** Increment to trigger inline file creation at root */
+  createFileTrigger?: number
 }
 
 type TreeNode = {
@@ -70,14 +72,20 @@ function FileContextMenu({
   onDelete,
   onRename,
   onDuplicate,
+  onCopyPath,
   onNewFileInFolder,
+  onNewFolderInFolder,
+  isEmptySpace,
 }: {
   state: ContextMenuState
   onClose: () => void
   onDelete?: (path: string) => void
   onRename?: (oldPath: string) => void
   onDuplicate?: (path: string) => void
+  onCopyPath?: (path: string) => void
   onNewFileInFolder?: (folderPath: string) => void
+  onNewFolderInFolder?: (folderPath: string) => void
+  isEmptySpace?: boolean
 }) {
   const ref = useRef<HTMLDivElement>(null)
 
@@ -98,33 +106,37 @@ function FileContextMenu({
     }
   }, [onClose])
 
-  const menuItems = state.isDir
+  const menuItems: { icon?: typeof FilePlus; label?: string; shortcut?: string; destructive?: boolean; divider?: boolean }[] = isEmptySpace
     ? [
         { icon: FilePlus, label: "New File", shortcut: "a" },
         { icon: FolderPlus, label: "New Folder", shortcut: "" },
-        { divider: true },
-        { icon: Pencil, label: "Rename", shortcut: "F2" },
-        { icon: Copy, label: "Duplicate", shortcut: "" },
-        { icon: ClipboardCopy, label: "Copy Path", shortcut: "" },
-        { divider: true },
-        { icon: Trash2, label: "Delete", shortcut: "", destructive: true },
       ]
-    : [
-        { icon: Pencil, label: "Rename", shortcut: "F2" },
-        { icon: Copy, label: "Duplicate", shortcut: "" },
-        { icon: ClipboardCopy, label: "Copy Path", shortcut: "" },
-        { divider: true },
-        { icon: Trash2, label: "Delete", shortcut: "Del", destructive: true },
-      ]
+    : state.isDir
+      ? [
+          { icon: FilePlus, label: "New File", shortcut: "a" },
+          { icon: FolderPlus, label: "New Folder", shortcut: "" },
+          { divider: true },
+          { icon: Pencil, label: "Rename", shortcut: "F2" },
+          { icon: Copy, label: "Duplicate", shortcut: "" },
+          { icon: ClipboardCopy, label: "Copy Path", shortcut: "" },
+          { divider: true },
+          { icon: Trash2, label: "Delete", shortcut: "", destructive: true },
+        ]
+      : [
+          { icon: Pencil, label: "Rename", shortcut: "F2" },
+          { icon: Copy, label: "Duplicate", shortcut: "" },
+          { icon: ClipboardCopy, label: "Copy Path", shortcut: "" },
+          { divider: true },
+          { icon: Trash2, label: "Delete", shortcut: "Del", destructive: true },
+        ]
 
   const handleAction = (label: string) => {
     switch (label) {
       case "Copy Path":
-        navigator.clipboard?.writeText(state.path)
+        onCopyPath?.(state.path)
         onClose()
         break
       case "Delete":
-        // Don't close - the caller will show a dialog
         onDelete?.(state.path)
         onClose()
         break
@@ -136,16 +148,15 @@ function FileContextMenu({
         onDuplicate?.(state.path)
         onClose()
         break
-      case "New File":
-        onNewFileInFolder?.(state.path)
+      case "New File": {
+        const folderPath = state.isDir ? state.path : state.path.substring(0, state.path.lastIndexOf("/")) || "/"
+        onNewFileInFolder?.(folderPath)
         onClose()
         break
+      }
       case "New Folder": {
-        const folderName = prompt("Folder name:")
-        if (folderName?.trim()) {
-          const folderPath = `${state.path}/${folderName.trim()}`
-          onNewFileInFolder?.(folderPath)
-        }
+        const folderPath = state.isDir ? state.path : state.path.substring(0, state.path.lastIndexOf("/")) || "/"
+        onNewFolderInFolder?.(folderPath)
         onClose()
         break
       }
@@ -165,7 +176,7 @@ function FileContextMenu({
       style={{ left: state.x, top: state.y }}
     >
       {menuItems.map((item, i) => {
-        if ("divider" in item && item.divider) {
+        if (item.divider) {
           return (
             <div
               key={`divider-${i}`}
@@ -266,10 +277,10 @@ export function FileTree({
   activeFilePath,
   presence,
   onOpenFile,
-  onNewFile,
   onDeleteFile,
   onRenameFile,
   onCreateFile,
+  createFileTrigger,
 }: FileTreeProps) {
   const [search, setSearch] = useState("")
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(
@@ -278,6 +289,14 @@ export function FileTree({
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [renamingPath, setRenamingPath] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
+  const [creatingIn, setCreatingIn] = useState<{ parentPath: string; isDir: boolean } | null>(null)
+
+  // External trigger for inline file creation (e.g., keyboard shortcut "a")
+  useEffect(() => {
+    if (createFileTrigger && createFileTrigger > 0) {
+      setCreatingIn({ parentPath: "/", isDir: false })
+    }
+  }, [createFileTrigger])
 
   const tree = useMemo(() => buildTree(files), [files])
 
@@ -309,13 +328,20 @@ export function FileTree({
 
   const handleRename = useCallback(
     (oldPath: string) => {
+      setRenamingPath(oldPath)
+    },
+    []
+  )
+
+  const handleRenameSubmit = useCallback(
+    (oldPath: string, newName: string) => {
       const name = oldPath.split("/").pop()!
-      const newName = prompt("Rename to:", name)
-      if (newName?.trim() && newName.trim() !== name) {
+      if (newName.trim() && newName.trim() !== name) {
         const parentPath = oldPath.substring(0, oldPath.lastIndexOf("/"))
         const newPath = `${parentPath}/${newName.trim()}`
         onRenameFile?.(oldPath, newPath)
       }
+      setRenamingPath(null)
     },
     [onRenameFile]
   )
@@ -332,15 +358,53 @@ export function FileTree({
     [files, onCreateFile]
   )
 
-  const handleNewFileInFolder = useCallback(
-    (folderPath: string) => {
-      const fileName = prompt("File name:", "new-file.ts")
-      if (fileName?.trim()) {
-        const newPath = `${folderPath}/${fileName.trim()}`
-        onCreateFile?.(newPath)
+  const handleStartInlineCreate = useCallback(
+    (parentPath: string, isDir: boolean) => {
+      setCreatingIn({ parentPath, isDir })
+      // Ensure parent folder is expanded
+      if (parentPath !== "/") {
+        setExpandedDirs((prev) => {
+          const next = new Set(prev)
+          next.add(parentPath)
+          return next
+        })
       }
     },
-    [onCreateFile]
+    []
+  )
+
+  const handleInlineCreateSubmit = useCallback(
+    (name: string) => {
+      if (!creatingIn || !name.trim()) {
+        setCreatingIn(null)
+        return
+      }
+      const parentPath = creatingIn.parentPath === "/" ? "" : creatingIn.parentPath
+      const newPath = `${parentPath}/${name.trim()}`
+      if (creatingIn.isDir) {
+        // Create a placeholder file inside the folder to make it appear
+        onCreateFile?.(`${newPath}/.gitkeep`)
+      } else {
+        onCreateFile?.(newPath)
+        onOpenFile(newPath)
+      }
+      setCreatingIn(null)
+    },
+    [creatingIn, onCreateFile, onOpenFile]
+  )
+
+  const handleNewFileInFolder = useCallback(
+    (folderPath: string) => {
+      handleStartInlineCreate(folderPath, false)
+    },
+    [handleStartInlineCreate]
+  )
+
+  const handleNewFolderInFolder = useCallback(
+    (folderPath: string) => {
+      handleStartInlineCreate(folderPath, true)
+    },
+    [handleStartInlineCreate]
   )
 
   return (
@@ -356,21 +420,19 @@ export function FileTree({
             className="h-7 pl-7 text-xs bg-background border-border-subtle"
           />
         </div>
-        {onNewFile && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 shrink-0"
-                onClick={onNewFile}
-              >
-                <Plus className="h-3.5 w-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">New file (a)</TooltipContent>
-          </Tooltip>
-        )}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 shrink-0"
+              onClick={() => handleStartInlineCreate("/", false)}
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">New file (a)</TooltipContent>
+        </Tooltip>
       </div>
 
       {/* Tree */}
@@ -384,6 +446,14 @@ export function FileTree({
         }}
       >
         <div className="py-1">
+          {creatingIn?.parentPath === "/" && (
+            <InlineCreateInput
+              isDir={creatingIn.isDir}
+              depth={0}
+              onSubmit={handleInlineCreateSubmit}
+              onCancel={() => setCreatingIn(null)}
+            />
+          )}
           {filteredFiles
             ? filteredFiles.map((file) => (
                 <FileItem
@@ -395,6 +465,9 @@ export function FileTree({
                   onClick={() => onOpenFile(file.path)}
                   onContextMenu={(e) => handleContextMenu(e, file.path, false)}
                   depth={0}
+                  renamingPath={renamingPath}
+                  onRenameSubmit={handleRenameSubmit}
+                  onRenameCancel={() => setRenamingPath(null)}
                 />
               ))
             : tree.map((node) => (
@@ -408,6 +481,12 @@ export function FileTree({
                   onOpenFile={onOpenFile}
                   onToggleDir={toggleDir}
                   onContextMenu={handleContextMenu}
+                  renamingPath={renamingPath}
+                  onRenameSubmit={handleRenameSubmit}
+                  onRenameCancel={() => setRenamingPath(null)}
+                  creatingIn={creatingIn}
+                  onCreateSubmit={handleInlineCreateSubmit}
+                  onCreateCancel={() => setCreatingIn(null)}
                 />
               ))}
         </div>
@@ -422,7 +501,14 @@ export function FileTree({
             onDelete={(path) => setDeleteTarget(path)}
             onRename={handleRename}
             onDuplicate={handleDuplicate}
+            onCopyPath={(path) => {
+              navigator.clipboard?.writeText(path).then(() => {
+                toast.success("Path copied to clipboard")
+              })
+            }}
             onNewFileInFolder={handleNewFileInFolder}
+            onNewFolderInFolder={handleNewFolderInFolder}
+            isEmptySpace={contextMenu.path === "/"}
           />
         )}
       </AnimatePresence>
@@ -465,6 +551,12 @@ function TreeNodeItem({
   onOpenFile,
   onToggleDir,
   onContextMenu,
+  renamingPath,
+  onRenameSubmit,
+  onRenameCancel,
+  creatingIn,
+  onCreateSubmit,
+  onCreateCancel,
 }: {
   node: TreeNode
   depth: number
@@ -474,6 +566,12 @@ function TreeNodeItem({
   onOpenFile: (path: string) => void
   onToggleDir: (path: string) => void
   onContextMenu: (e: React.MouseEvent, path: string, isDir: boolean) => void
+  renamingPath: string | null
+  onRenameSubmit: (oldPath: string, newName: string) => void
+  onRenameCancel: () => void
+  creatingIn: { parentPath: string; isDir: boolean } | null
+  onCreateSubmit: (name: string) => void
+  onCreateCancel: () => void
 }) {
   const isExpanded = expandedDirs.has(node.path)
   const presenceForFile = presence.filter(
@@ -481,6 +579,7 @@ function TreeNodeItem({
   )
 
   if (node.isDir) {
+    const isCreatingHere = creatingIn?.parentPath === node.path
     return (
       <div>
         <button
@@ -514,6 +613,14 @@ function TreeNodeItem({
               transition={{ duration: 0.15 }}
               className="overflow-hidden"
             >
+              {isCreatingHere && (
+                <InlineCreateInput
+                  isDir={creatingIn.isDir}
+                  depth={depth + 1}
+                  onSubmit={onCreateSubmit}
+                  onCancel={onCreateCancel}
+                />
+              )}
               {node.children.map((child) => (
                 <TreeNodeItem
                   key={child.path}
@@ -525,6 +632,12 @@ function TreeNodeItem({
                   onOpenFile={onOpenFile}
                   onToggleDir={onToggleDir}
                   onContextMenu={onContextMenu}
+                  renamingPath={renamingPath}
+                  onRenameSubmit={onRenameSubmit}
+                  onRenameCancel={onRenameCancel}
+                  creatingIn={creatingIn}
+                  onCreateSubmit={onCreateSubmit}
+                  onCreateCancel={onCreateCancel}
                 />
               ))}
             </motion.div>
@@ -543,6 +656,9 @@ function TreeNodeItem({
       onClick={() => onOpenFile(node.path)}
       onContextMenu={(e) => onContextMenu(e, node.path, false)}
       depth={depth}
+      renamingPath={renamingPath}
+      onRenameSubmit={onRenameSubmit}
+      onRenameCancel={onRenameCancel}
     />
   )
 }
@@ -555,6 +671,9 @@ function FileItem({
   onClick,
   onContextMenu,
   depth,
+  renamingPath,
+  onRenameSubmit,
+  onRenameCancel,
 }: {
   name: string
   path: string
@@ -563,8 +682,63 @@ function FileItem({
   onClick: () => void
   onContextMenu?: (e: React.MouseEvent) => void
   depth: number
+  renamingPath?: string | null
+  onRenameSubmit?: (oldPath: string, newName: string) => void
+  onRenameCancel?: () => void
 }) {
   const fileName = name.includes("/") ? name.split("/").pop()! : name
+  const isRenaming = renamingPath === path
+  const renameInputRef = useRef<HTMLInputElement>(null)
+  const [renameValue, setRenameValue] = useState(fileName)
+
+  useEffect(() => {
+    if (isRenaming) {
+      setRenameValue(fileName)
+      // Focus after render
+      setTimeout(() => {
+        renameInputRef.current?.focus()
+        // Select the name part without extension
+        const dotIdx = fileName.lastIndexOf(".")
+        renameInputRef.current?.setSelectionRange(0, dotIdx > 0 ? dotIdx : fileName.length)
+      }, 0)
+    }
+  }, [isRenaming, fileName])
+
+  if (isRenaming) {
+    return (
+      <div
+        className={cn(
+          "flex w-full items-center gap-1.5 rounded-md px-2 py-0.5",
+          "bg-elevated ring-1 ring-brand"
+        )}
+        style={{ paddingLeft: `${depth * 12 + 20}px` }}
+      >
+        {getFileIcon(fileName)}
+        <input
+          ref={renameInputRef}
+          value={renameValue}
+          onChange={(e) => setRenameValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              onRenameSubmit?.(path, renameValue)
+            } else if (e.key === "Escape") {
+              onRenameCancel?.()
+            }
+          }}
+          onBlur={() => {
+            // Submit on blur if value changed
+            if (renameValue.trim() && renameValue.trim() !== fileName) {
+              onRenameSubmit?.(path, renameValue)
+            } else {
+              onRenameCancel?.()
+            }
+          }}
+          className="flex-1 bg-transparent text-xs text-text-primary outline-none"
+          spellCheck={false}
+        />
+      </div>
+    )
+  }
 
   return (
     <button
@@ -595,5 +769,64 @@ function FileItem({
         </div>
       )}
     </button>
+  )
+}
+
+function InlineCreateInput({
+  isDir,
+  depth,
+  onSubmit,
+  onCancel,
+}: {
+  isDir: boolean
+  depth: number
+  onSubmit: (name: string) => void
+  onCancel: () => void
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [value, setValue] = useState("")
+
+  useEffect(() => {
+    setTimeout(() => inputRef.current?.focus(), 0)
+  }, [])
+
+  const icon = isDir
+    ? <Folder className="h-4 w-4 text-text-tertiary" />
+    : value
+      ? getFileIcon(value)
+      : <File className="h-4 w-4 text-text-tertiary" />
+
+  return (
+    <div
+      className={cn(
+        "flex w-full items-center gap-1.5 rounded-md px-2 py-0.5",
+        "bg-elevated ring-1 ring-brand"
+      )}
+      style={{ paddingLeft: `${depth * 12 + 20}px` }}
+    >
+      {icon}
+      <input
+        ref={inputRef}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && value.trim()) {
+            onSubmit(value.trim())
+          } else if (e.key === "Escape") {
+            onCancel()
+          }
+        }}
+        onBlur={() => {
+          if (value.trim()) {
+            onSubmit(value.trim())
+          } else {
+            onCancel()
+          }
+        }}
+        placeholder={isDir ? "folder name..." : "filename..."}
+        className="flex-1 bg-transparent text-xs text-text-primary outline-none placeholder:text-text-tertiary"
+        spellCheck={false}
+      />
+    </div>
   )
 }

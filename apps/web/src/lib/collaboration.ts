@@ -52,6 +52,8 @@ export interface UseCollaborationReturn {
   dockerStatus: DockerStatus
   dockerError: string | null
   dockerStats: DockerStats | null
+  terminalBusy: Record<string, boolean>
+  terminalCwds: Record<string, string>
   files: FileNode[]
   presence: PresenceUser[]
   localClientId: number | null
@@ -140,6 +142,8 @@ export function useCollaboration({
   const [dockerStatus, setDockerStatus] = useState<DockerStatus>(null)
   const [dockerError, setDockerError] = useState<string | null>(null)
   const [dockerStats, setDockerStats] = useState<DockerStats | null>(null)
+  const [terminalBusy, setTerminalBusy] = useState<Record<string, boolean>>({})
+  const [terminalCwds, setTerminalCwds] = useState<Record<string, string>>({})
 
   // ── Sync helpers ──
 
@@ -160,8 +164,9 @@ export function useCollaboration({
     filesMap.forEach((value: unknown, key: string) => {
       if (value instanceof Y.Text) {
         const ext = key.split(".").pop() ?? ""
+        const normalizedPath = key.startsWith("/") ? key : "/" + key
         newFiles.push({
-          path: key,
+          path: normalizedPath,
           content: (value as { toString(): string }).toString(),
           language: langMap[ext] ?? "plaintext",
         })
@@ -476,6 +481,16 @@ export function useCollaboration({
         }
       })
 
+      // ── Terminal busy / cwd updates ──
+      socket.on("terminal-busy", (msg: { sessionId: string; busy: boolean; cwd?: string }) => {
+        if (!destroyed) {
+          setTerminalBusy((prev) => ({ ...prev, [msg.sessionId]: msg.busy }))
+          if (msg.cwd) {
+            setTerminalCwds((prev) => ({ ...prev, [msg.sessionId]: msg.cwd! }))
+          }
+        }
+      })
+
       // ── Doc updates → server ──
       const onDocUpdate = (update: Uint8Array, origin: unknown) => {
         if (origin === socket) return
@@ -574,7 +589,12 @@ export function useCollaboration({
     const doc = ydocRef.current
     if (!Y || !doc) return null
     const filesMap = doc.getMap("files")
-    const ytext = filesMap.get(path)
+    // Try exact path, then with/without leading slash
+    let ytext = filesMap.get(path)
+    if (!(ytext instanceof Y.Text)) {
+      const alt = path.startsWith("/") ? path.slice(1) : "/" + path
+      ytext = filesMap.get(alt)
+    }
     if (ytext instanceof Y.Text) return ytext
     return null
   }, [])
@@ -603,18 +623,22 @@ export function useCollaboration({
     const doc = ydocRef.current
     if (!Y || !doc) return
     const filesMap = doc.getMap("files")
-    if (filesMap.has(path)) return
+    // Normalize: strip leading slash so keys match container paths
+    const normalizedPath = path.startsWith("/") ? path.slice(1) : path
+    if (filesMap.has(normalizedPath) || filesMap.has("/" + normalizedPath)) return
     doc.transact(() => {
       const ytext = new Y.Text()
       if (content) ytext.insert(0, content)
-      filesMap.set(path, ytext)
+      filesMap.set(normalizedPath, ytext)
     })
   }, [])
 
   const deleteFile = useCallback((path: string) => {
     const doc = ydocRef.current
     if (!doc) return
-    doc.transact(() => { doc.getMap("files").delete(path) })
+    const filesMap = doc.getMap("files")
+    const key = filesMap.has(path) ? path : (path.startsWith("/") ? path.slice(1) : "/" + path)
+    doc.transact(() => { filesMap.delete(key) })
   }, [])
 
   const renameFile = useCallback((oldPath: string, newPath: string) => {
@@ -622,13 +646,22 @@ export function useCollaboration({
     const doc = ydocRef.current
     if (!Y || !doc) return
     const filesMap = doc.getMap("files")
-    const existing = filesMap.get(oldPath)
+    let existing = filesMap.get(oldPath)
+    let actualOldKey = oldPath
+    if (!(existing instanceof Y.Text)) {
+      const alt = oldPath.startsWith("/") ? oldPath.slice(1) : "/" + oldPath
+      existing = filesMap.get(alt)
+      actualOldKey = alt
+    }
     if (!(existing instanceof Y.Text)) return
+    // Normalize new key: strip leading slash to match container convention
+    const normalizedNewPath = newPath.startsWith("/") ? newPath.slice(1) : newPath
+    const content = existing.toString()
     doc.transact(() => {
       const newText = new Y.Text()
-      newText.insert(0, existing.toString())
-      filesMap.set(newPath, newText)
-      filesMap.delete(oldPath)
+      newText.insert(0, content)
+      filesMap.set(normalizedNewPath, newText)
+      filesMap.delete(actualOldKey)
     })
   }, [])
 
@@ -638,6 +671,11 @@ export function useCollaboration({
     if (!Y || !doc) return
     const filesMap = doc.getMap("files")
     let ytext = filesMap.get(path)
+    if (!(ytext instanceof Y.Text)) {
+      // Try alternate path (with/without leading slash)
+      const alt = path.startsWith("/") ? path.slice(1) : "/" + path
+      ytext = filesMap.get(alt)
+    }
     if (!(ytext instanceof Y.Text)) {
       ytext = new Y.Text()
       filesMap.set(path, ytext)
@@ -916,6 +954,8 @@ export function useCollaboration({
     dockerStatus,
     dockerError,
     dockerStats,
+    terminalBusy,
+    terminalCwds,
     files,
     presence,
     localClientId,

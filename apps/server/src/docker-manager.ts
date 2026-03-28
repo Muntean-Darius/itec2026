@@ -318,7 +318,7 @@ export async function destroyContainer(projectId: string): Promise<void> {
 
 /**
  * Write files from the Yjs doc into the container filesystem.
- * Uses `docker exec` to write files via shell commands.
+ * Uses a single exec call with a shell script for efficiency.
  */
 export async function syncFilesToContainer(
   projectId: string,
@@ -326,28 +326,41 @@ export async function syncFilesToContainer(
 ): Promise<void> {
   const entry = containers.get(projectId)
   if (!entry || entry.status !== "ready" && entry.status !== "creating") return
+  if (files.size === 0) return
 
+  // Build a batch script that creates dirs and writes all files in one exec
+  const commands: string[] = []
   for (const [filePath, content] of files) {
-    try {
-      // Ensure parent directory exists
-      const dir = filePath.substring(0, filePath.lastIndexOf("/")) || "."
-      await execInContainer(entry, ["mkdir", "-p", `${CONTAINER_WORKDIR}/${dir}`])
+    const dir = filePath.substring(0, filePath.lastIndexOf("/")) || "."
+    const b64 = Buffer.from(content, "utf-8").toString("base64")
+    commands.push(`mkdir -p "${CONTAINER_WORKDIR}/${dir}"`)
+    commands.push(`echo '${b64}' | base64 -d > "${CONTAINER_WORKDIR}/${filePath}"`)
+  }
 
-      // Write file content using base64 to avoid shell escaping issues
-      const b64 = Buffer.from(content, "utf-8").toString("base64")
-      await execInContainer(entry, [
-        "sh", "-c",
-        `echo '${b64}' | base64 -d > ${CONTAINER_WORKDIR}/${filePath}`,
-      ])
-    } catch (err) {
-      console.warn(`[iTECify Docker] Failed to write ${filePath} to container:`, err)
+  try {
+    await execInContainer(entry, ["sh", "-c", commands.join(" && ")])
+  } catch (err) {
+    console.warn(`[iTECify Docker] Batch file write failed, falling back to individual writes:`, err)
+    // Fallback: write files individually
+    for (const [filePath, content] of files) {
+      try {
+        const dir = filePath.substring(0, filePath.lastIndexOf("/")) || "."
+        await execInContainer(entry, ["mkdir", "-p", `${CONTAINER_WORKDIR}/${dir}`])
+        const b64 = Buffer.from(content, "utf-8").toString("base64")
+        await execInContainer(entry, [
+          "sh", "-c",
+          `echo '${b64}' | base64 -d > ${CONTAINER_WORKDIR}/${filePath}`,
+        ])
+      } catch (innerErr) {
+        console.warn(`[iTECify Docker] Failed to write ${filePath} to container:`, innerErr)
+      }
     }
   }
 }
 
 /**
  * Read all files from the container workspace back into a Map.
- * Used after commands execute to detect file changes.
+ * Uses a single exec call with a shell loop for efficiency.
  */
 export async function readFilesFromContainer(
   projectId: string,
@@ -357,26 +370,35 @@ export async function readFilesFromContainer(
   if (!entry || entry.status !== "ready") return result
 
   try {
-    // List all files recursively
-    const listOutput = await execInContainer(entry, [
-      "find", CONTAINER_WORKDIR, "-type", "f",
-      "-not", "-path", "*/node_modules/*",
-      "-not", "-path", "*/.git/*",
-    ])
+    // Single exec: find all files and output path + base64 content with delimiters
+    const DELIM = "__ITECIFY_FILE_DELIM__"
+    const script = `find ${CONTAINER_WORKDIR} -type f -not -path '*/node_modules/*' -not -path '*/.git/*' | while IFS= read -r f; do echo "${DELIM}"; echo "$f"; base64 "$f" 2>/dev/null; done`
+    const output = await execInContainer(entry, ["sh", "-c", script])
 
-    const paths = listOutput
-      .split("\n")
-      .map(p => p.trim())
-      .filter(p => p.startsWith(CONTAINER_WORKDIR + "/"))
+    if (!output.trim()) return result
 
-    for (const absPath of paths) {
+    // Parse the output: DELIM, then path line, then base64 content lines
+    const blocks = output.split(DELIM).filter(b => b.trim())
+    for (const block of blocks) {
+      const lines = block.split("\n")
+      // First non-empty line is the path
+      let pathIdx = 0
+      while (pathIdx < lines.length && !lines[pathIdx].trim()) pathIdx++
+      if (pathIdx >= lines.length) continue
+
+      const absPath = lines[pathIdx].trim()
+      if (!absPath.startsWith(CONTAINER_WORKDIR + "/")) continue
+
       const relPath = absPath.slice(CONTAINER_WORKDIR.length + 1)
       if (!relPath) continue
+
+      // Remaining lines are base64 content
+      const b64Content = lines.slice(pathIdx + 1).join("\n").trim()
       try {
-        const content = await execInContainer(entry, ["cat", absPath])
+        const content = Buffer.from(b64Content, "base64").toString("utf-8")
         result.set(relPath, content)
       } catch {
-        // skip unreadable files
+        // Skip files that can't be decoded (binary files etc.)
       }
     }
   } catch (err) {
@@ -423,11 +445,23 @@ async function execInContainer(
 export interface ExecCommandResult {
   output: string
   exitCode: number | null
+  cwd: string
+}
+
+// Track cwd per terminal session: projectId:sessionId → cwd
+const sessionCwds = new Map<string, string>()
+
+/**
+ * Get the current working directory for a terminal session.
+ */
+export function getSessionCwd(projectId: string, terminalSessionId: string): string {
+  return sessionCwds.get(`${projectId}:${terminalSessionId}`) ?? CONTAINER_WORKDIR
 }
 
 /**
  * Execute a single command in the container for a terminal session.
- * Returns the combined stdout+stderr output.
+ * Tracks the current working directory across commands.
+ * Returns the combined stdout+stderr output plus the new cwd.
  */
 export async function executeCommand(
   projectId: string,
@@ -441,12 +475,20 @@ export async function executeCommand(
         ? "⏳ Docker instance is starting up, please wait..."
         : "❌ Docker instance is not available.",
       exitCode: 1,
+      cwd: CONTAINER_WORKDIR,
     }
   }
 
+  const cwdKey = `${projectId}:${terminalSessionId}`
+  const cwd = sessionCwds.get(cwdKey) ?? CONTAINER_WORKDIR
+
   try {
+    // Wrap command: cd to tracked cwd, run command, then emit separator + pwd
+    const CWD_SEPARATOR = "__ITECIFY_CWD__"
+    const wrappedCommand = `cd ${JSON.stringify(cwd)} 2>/dev/null; ${command}; __exit=$?; echo "${CWD_SEPARATOR}"; pwd; exit $__exit`
+
     const exec = await entry.container.exec({
-      Cmd: ["sh", "-c", command],
+      Cmd: ["sh", "-c", wrappedCommand],
       AttachStdout: true,
       AttachStderr: true,
       WorkingDir: CONTAINER_WORKDIR,
@@ -454,7 +496,7 @@ export async function executeCommand(
 
     const stream = await exec.start({ hijack: true, stdin: false })
 
-    const output = await new Promise<string>((resolve, reject) => {
+    const { stdoutStr, stderrStr } = await new Promise<{ stdoutStr: string; stderrStr: string }>((resolve, reject) => {
       const stdoutChunks: Buffer[] = []
       const stderrChunks: Buffer[] = []
       const stdout = new PassThrough()
@@ -466,16 +508,20 @@ export async function executeCommand(
       stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk))
 
       stream.on("end", () => {
-        const out = Buffer.concat(stdoutChunks).toString("utf-8")
-        const err = Buffer.concat(stderrChunks).toString("utf-8")
-        resolve((out + err).trimEnd())
+        resolve({
+          stdoutStr: Buffer.concat(stdoutChunks).toString("utf-8"),
+          stderrStr: Buffer.concat(stderrChunks).toString("utf-8"),
+        })
       })
       stream.on("error", reject)
 
       // Safety timeout — kill after 30 seconds
       setTimeout(() => {
         try { stream.destroy() } catch { /* ignore */ }
-        resolve(Buffer.concat(stdoutChunks).toString("utf-8").trimEnd() + "\n[Process timed out after 30s]")
+        resolve({
+          stdoutStr: Buffer.concat(stdoutChunks).toString("utf-8"),
+          stderrStr: Buffer.concat(stderrChunks).toString("utf-8") + "\n[Process timed out after 30s]",
+        })
       }, 30_000)
     })
 
@@ -483,12 +529,33 @@ export async function executeCommand(
     const inspectResult = await exec.inspect()
     const exitCode = inspectResult.ExitCode ?? null
 
-    return { output, exitCode }
+    // Parse out the cwd from the separator (only in stdout)
+    let stdoutOutput = stdoutStr
+    let newCwd = cwd
+    const sepIdx = stdoutStr.lastIndexOf(CWD_SEPARATOR)
+    if (sepIdx !== -1) {
+      stdoutOutput = stdoutStr.substring(0, sepIdx).trimEnd()
+      const afterSep = stdoutStr.substring(sepIdx + CWD_SEPARATOR.length).trim()
+      // The first line after separator is the pwd output
+      const pwdLine = afterSep.split("\n")[0]?.trim()
+      if (pwdLine) newCwd = pwdLine
+    }
+
+    // Combine stdout and stderr, each on its own line
+    const parts: string[] = []
+    if (stdoutOutput.trimEnd()) parts.push(stdoutOutput.trimEnd())
+    if (stderrStr.trimEnd()) parts.push(stderrStr.trimEnd())
+    const output = parts.join("\n")
+
+    sessionCwds.set(cwdKey, newCwd)
+
+    return { output, exitCode, cwd: newCwd }
   } catch (err) {
     console.error(`[iTECify Docker] Exec failed for ${projectId}/${terminalSessionId}:`, err)
     return {
       output: `Error executing command: ${(err as Error).message}`,
       exitCode: 1,
+      cwd,
     }
   }
 }
@@ -650,8 +717,9 @@ async function runSyncCycle(projectId: string): Promise<void> {
 }
 
 /**
- * Force a full Yjs → container sync. Called before executing a command
- * to ensure the container has the latest editor state.
+ * Sync only changed Yjs files → container before executing a command.
+ * Uses the lastSyncedToContainer snapshot for a fast differential sync
+ * rather than writing all files every time.
  */
 export async function syncBeforeCommand(projectId: string): Promise<void> {
   const state = fileSyncStates.get(projectId)
@@ -663,23 +731,35 @@ export async function syncBeforeCommand(projectId: string): Promise<void> {
   if (!getFiles) return
 
   const currentFiles = getFiles()
-  await syncFilesToContainer(projectId, currentFiles)
 
-  // Also delete container files that don't exist in Yjs
-  try {
-    const containerFiles = await readFilesFromContainer(projectId)
-    for (const [filePath] of containerFiles) {
+  if (state) {
+    // Differential sync: only write files that changed since last sync
+    const filesToWrite = new Map<string, string>()
+    for (const [filePath, content] of currentFiles) {
+      const lastSynced = state.lastSyncedToContainer.get(filePath)
+      if (lastSynced === undefined || lastSynced !== content) {
+        filesToWrite.set(filePath, content)
+      }
+    }
+
+    // Delete files that were in last sync but gone now
+    for (const [filePath] of state.lastSyncedToContainer) {
       if (!currentFiles.has(filePath)) {
         try {
           await execInContainer(entry, ["rm", "-f", `${CONTAINER_WORKDIR}/${filePath}`])
         } catch { /* ignore */ }
       }
     }
-  } catch { /* ignore */ }
 
-  // Update snapshot
-  if (state) {
+    if (filesToWrite.size > 0) {
+      await syncFilesToContainer(projectId, filesToWrite)
+    }
+
+    // Update snapshot
     state.lastSyncedToContainer = new Map(currentFiles)
+  } else {
+    // No sync state — fall back to writing all files
+    await syncFilesToContainer(projectId, currentFiles)
   }
 }
 

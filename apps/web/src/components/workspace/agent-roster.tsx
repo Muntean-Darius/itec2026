@@ -30,7 +30,7 @@ export function AgentRoster({ agents, onClose }: AgentRosterProps) {
       <div className="flex h-11 shrink-0 items-center justify-between border-b border-border-subtle px-3">
         <div className="flex items-center gap-2">
           <Bot className="h-4 w-4 text-ai" />
-          <span className="text-sm font-medium text-text-primary">AI Agents</span>
+          <span className="text-sm font-medium text-text-primary">AI Assistants & Chats</span>
         </div>
         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose}>
           <X className="h-4 w-4" />

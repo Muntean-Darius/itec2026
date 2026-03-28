@@ -9,7 +9,6 @@ import type { TerminalLine, PresenceUser } from "@/data/types"
 import type { TerminalSession, DockerStatus } from "@/lib/collaboration"
 
 interface TerminalPanelProps {
-  isRunning: boolean
   sessions: TerminalSession[]
   activeSessionId: string | null
   onSelectSession: (id: string) => void
@@ -28,10 +27,20 @@ interface TerminalPanelProps {
   dockerStatus?: DockerStatus
   /** Docker error message */
   dockerError?: string | null
+  /** Per-session busy state (command is running) */
+  terminalBusy?: Record<string, boolean>
+  /** Per-session current working directory */
+  terminalCwds?: Record<string, string>
+}
+
+/** Format cwd for display: replace /home/itecify/workspace with ~ */
+function formatCwd(cwd: string): string {
+  return cwd
+    .replace(/^\/home\/itecify\/workspace\/?/, "~/workspace/")
+    .replace(/\/$/, "") || "~"
 }
 
 export function TerminalPanel({
-  isRunning,
   sessions,
   activeSessionId,
   onSelectSession,
@@ -44,6 +53,8 @@ export function TerminalPanel({
   currentUserId,
   dockerStatus,
   dockerError,
+  terminalBusy = {},
+  terminalCwds = {},
 }: TerminalPanelProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -53,6 +64,14 @@ export function TerminalPanel({
   const [lastSeenLines, setLastSeenLines] = useState<Record<string, number>>({})
   // Track unread counts for badge
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({})
+  // Command history per session
+  const [commandHistory, setCommandHistory] = useState<Record<string, string[]>>({})
+  const [historyIndex, setHistoryIndex] = useState<number>(-1)
+  // Stash the current input when browsing history
+  const historyStash = useRef<string>("")
+
+  const isSessionBusy = activeSessionId ? (terminalBusy[activeSessionId] ?? false) : false
+  const sessionCwd = activeSessionId ? (terminalCwds[activeSessionId] ?? "/home/itecify/workspace") : ""
 
   const activeSession = sessions.find((s) => s.id === activeSessionId)
   const lines: TerminalLine[] = activeSession?.lines ?? []
@@ -120,7 +139,7 @@ export function TerminalPanel({
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [lines, isRunning])
+  }, [lines, isSessionBusy])
 
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const newValue = e.target.value
@@ -158,8 +177,21 @@ export function TerminalPanel({
   }, [inputYText, awareness, activeSessionId])
 
   const handleInputKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    const sessionId = activeSessionId
+    if (!sessionId) return
+    const history = commandHistory[sessionId] ?? []
+
     if (e.key === "Enter" && inputValue.trim()) {
-      onInput?.(inputValue.trim())
+      const cmd = inputValue.trim()
+      // Add to command history
+      setCommandHistory((prev) => {
+        const sessionHist = prev[sessionId] ?? []
+        return { ...prev, [sessionId]: [...sessionHist, cmd] }
+      })
+      setHistoryIndex(-1)
+      historyStash.current = ""
+
+      onInput?.(cmd)
       setInputValue("")
       // Clear Y.Text
       if (inputYText) {
@@ -171,8 +203,51 @@ export function TerminalPanel({
         }
         suppressYTextSync.current = false
       }
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault()
+      if (history.length === 0) return
+      const newIndex = historyIndex === -1 ? history.length - 1 : Math.max(0, historyIndex - 1)
+      if (historyIndex === -1) {
+        // Stash current input before browsing
+        historyStash.current = inputValue
+      }
+      setHistoryIndex(newIndex)
+      const histCmd = history[newIndex] ?? ""
+      setInputValue(histCmd)
+      syncInputToYText(histCmd)
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault()
+      if (historyIndex === -1) return
+      const newIndex = historyIndex + 1
+      if (newIndex >= history.length) {
+        // Restore stashed input
+        setHistoryIndex(-1)
+        setInputValue(historyStash.current)
+        syncInputToYText(historyStash.current)
+      } else {
+        setHistoryIndex(newIndex)
+        const histCmd = history[newIndex] ?? ""
+        setInputValue(histCmd)
+        syncInputToYText(histCmd)
+      }
     }
-  }, [inputValue, onInput, inputYText])
+  }, [inputValue, onInput, inputYText, activeSessionId, commandHistory, historyIndex])
+
+  /** Helper: sync a value to Y.Text */
+  const syncInputToYText = useCallback((value: string) => {
+    if (!inputYText) return
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const yt = inputYText as any
+    suppressYTextSync.current = true
+    const current = yt.toString()
+    if (current !== value) {
+      yt.doc.transact(() => {
+        if (yt.length > 0) yt.delete(0, yt.length)
+        if (value) yt.insert(0, value)
+      })
+    }
+    suppressYTextSync.current = false
+  }, [inputYText])
 
   const handleInputClick = useCallback(() => {
     if (awareness && activeSessionId && inputRef.current) {
@@ -251,7 +326,7 @@ export function TerminalPanel({
           </button>
         </div>
 
-        {isRunning && (
+        {isSessionBusy && (
           <span className="ml-auto flex items-center gap-1.5 pr-2">
             <span className="relative flex h-2 w-2">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-75" />
@@ -261,7 +336,7 @@ export function TerminalPanel({
           </span>
         )}
 
-        {!isRunning && dockerStatus && dockerStatus !== "ready" && (
+        {!isSessionBusy && dockerStatus && dockerStatus !== "ready" && (
           <span className="ml-auto flex items-center gap-1.5 pr-2">
             {dockerStatus === "creating" && (
               <>
@@ -283,7 +358,7 @@ export function TerminalPanel({
           </span>
         )}
 
-        {!isRunning && dockerStatus === "ready" && (
+        {!isSessionBusy && dockerStatus === "ready" && (
           <span className="ml-auto flex items-center gap-1.5 pr-2">
             <span className="relative flex h-2 w-2">
               <span className="relative inline-flex h-2 w-2 rounded-full bg-success" />
@@ -347,25 +422,24 @@ export function TerminalPanel({
                   )}
                 >
                   {line.type === "stdin" && (
-                    <span className="text-text-tertiary">$ </span>
+                    <span className="text-text-tertiary">{line.cwd ? formatCwd(line.cwd) + " $ " : "$ "}</span>
                   )}
                   {line.content}
                 </div>
               )
             })}
 
-            {isRunning && (
+            {isSessionBusy && (
               <div className="mt-1 flex items-center gap-2">
-                <span className="text-text-tertiary">$</span>
-                <span className="text-ai">Scanning for vulnerabilities...</span>
+                <span className="text-text-tertiary">{formatCwd(sessionCwd)} $</span>
                 <span className="inline-block animate-pulse text-text-tertiary">▊</span>
               </div>
             )}
 
-            {!isRunning && (
+            {!isSessionBusy && (
               <div className="relative">
                 <div className="flex items-center gap-1">
-                  <span className="text-text-tertiary">~/itecify $&nbsp;</span>
+                  <span className="text-text-tertiary shrink-0">{formatCwd(sessionCwd)} $&nbsp;</span>
                   <div className="relative flex-1">
                     <input
                       ref={inputRef}
