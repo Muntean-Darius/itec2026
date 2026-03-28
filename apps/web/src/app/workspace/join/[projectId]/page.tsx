@@ -2,6 +2,7 @@ import { redirect } from "next/navigation"
 import { getAuthUser } from "@/data/queries"
 import { PrismaClient } from "@/generated/prisma/client"
 import { PrismaPg } from "@prisma/adapter-pg"
+import { JoinPreview } from "./join-preview"
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
 const prisma = new PrismaClient({ adapter })
@@ -26,10 +27,16 @@ export default async function JoinWorkspacePage({ params }: JoinPageProps) {
   const user = await getAuthUser()
   if (!user) redirect("/login")
 
-  // Check project exists
+  // Fetch project with collaborators
   const project = await prisma.project.findUnique({
     where: { id: projectId },
+    include: {
+      memberships: {
+        include: { user: true },
+      },
+    },
   })
+
   if (!project) {
     return (
       <div className="flex h-screen items-center justify-center bg-background">
@@ -38,22 +45,34 @@ export default async function JoinWorkspacePage({ params }: JoinPageProps) {
     )
   }
 
-  // Add membership if not already a member
-  const existingMembership = await prisma.projectMembership.findUnique({
-    where: { userId_projectId: { userId: user.id, projectId } },
-  })
-
-  if (!existingMembership) {
-    await prisma.projectMembership.create({
-      data: {
-        userId: user.id,
-        projectId,
-        role: "EDITOR",
-      },
-    })
+  // Already a member — skip preview, go straight to workspace
+  const isMember = project.memberships.some((m) => m.userId === user.id)
+  if (isMember) {
+    redirect(`/workspace/${projectId}`)
   }
 
-  // Redirect to the workspace — dashboard will show updated data
-  // on next visit since it's a dynamic server component
-  redirect(`/workspace/${projectId}`)
+  // Find the owner
+  const ownerMembership = project.memberships.find((m) => m.role === "OWNER")
+
+  return (
+    <JoinPreview
+      project={{
+        id: project.id,
+        name: project.name,
+        description: project.description,
+        language: project.language,
+        createdAt: project.createdAt.toISOString(),
+        owner: {
+          name: ownerMembership?.user.name ?? "Unknown",
+          avatarUrl: ownerMembership?.user.avatarUrl ?? null,
+        },
+        collaborators: project.memberships.map((m) => ({
+          id: m.user.id,
+          name: m.user.name,
+          avatarUrl: m.user.avatarUrl,
+          cursorColor: m.user.cursorColor,
+        })),
+      }}
+    />
+  )
 }
