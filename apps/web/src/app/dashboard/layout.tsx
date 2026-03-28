@@ -28,7 +28,9 @@ export default async function DashboardLayout({
   return (
     <div className="flex flex-col h-screen">
       <Topbar breadcrumb={["Dashboard"]} userInitials={initials} />
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden" style={{ paddingTop: 56 }}>
+        {/* Sidebar spacer for fixed sidebar */}
+        <div className="hidden md:block shrink-0" style={{ width: 240 }} />
         <Sidebar />
         <main className="flex flex-1 flex-col overflow-y-auto bg-background">
           {children}
