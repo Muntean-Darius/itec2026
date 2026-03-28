@@ -630,7 +630,9 @@ export function CodeEditor({
           fontFamily: "var(--font-jetbrains-mono), 'JetBrains Mono', monospace",
           fontLigatures: true,
           lineHeight: 20,
-          padding: { top: 12, bottom: 12 },
+          // Reserve a thin header lane for collaborator cursor badges so
+          // top-line flags never sit under chrome or over the code itself.
+          padding: { top: 28, bottom: 12 },
           minimap: { enabled: false },
           scrollBeyondLastLine: false,
           smoothScrolling: true,
@@ -715,31 +717,42 @@ export function CodeEditor({
 
       {/* Remote cursor overlays — always visible regardless of editor focus */}
       {remoteCursors.map((cursor) => (
-        <div
-          key={cursor.clientId}
-          className="pointer-events-none absolute z-20"
-          style={{
-            top: cursor.top,
-            left: cursor.left,
-            transition: "top 120ms ease-out, left 120ms ease-out",
-          }}
-        >
-          {/* Cursor line */}
-          <div
-            style={{
-              width: 2,
-              height: cursor.height,
-              backgroundColor: cursor.color,
-            }}
-          />
-          {/* Name label */}
-          <div
-            className="absolute -top-4 left-0 whitespace-nowrap rounded px-1 py-0.5 text-[10px] font-medium leading-none text-white"
-            style={{ backgroundColor: cursor.color }}
-          >
-            {cursor.name}
-          </div>
-        </div>
+        (() => {
+          const labelAbsoluteTop = Math.max(4, cursor.top - 16)
+          const isDockedToTopRail = labelAbsoluteTop <= 6
+
+          return (
+            <div
+              key={cursor.clientId}
+              className="pointer-events-none absolute z-40"
+              style={{
+                top: cursor.top,
+                left: cursor.left,
+                transition: "top 120ms ease-out, left 120ms ease-out",
+              }}
+            >
+              {/* Cursor line */}
+              <div
+                style={{
+                  width: 2,
+                  height: cursor.height,
+                  backgroundColor: cursor.color,
+                }}
+              />
+              {/* Name label */}
+              <div
+                className="absolute whitespace-nowrap rounded px-1 py-0.5 text-[10px] font-medium leading-none text-white shadow-sm"
+                style={{
+                  backgroundColor: cursor.color,
+                  top: labelAbsoluteTop - cursor.top,
+                  left: isDockedToTopRail ? 8 : 0,
+                }}
+              >
+                {cursor.name}
+              </div>
+            </div>
+          )
+        })()
       ))}
     </div>
   )
