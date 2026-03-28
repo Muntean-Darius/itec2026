@@ -18,7 +18,7 @@ out
 apps/server/dist
 
 # generated files
-apps/server/src/generated/prisma
+**/generated/prisma
 
 # environment variables
 .env
