@@ -1,0 +1,121 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// iTECify — Prisma Schema
+// PostgreSQL on Supabase  •  Supabase Auth for users
+// ═══════════════════════════════════════════════════════════════════════════
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── User Profile ────────────────────────────────────────────────────────
+// Synced from Supabase Auth via trigger / webhook.
+// The id matches auth.users.id (UUID).
+
+model User {
+  id          String   @id @default(uuid()) @db.Uuid
+  email       String   @unique
+  name        String
+  avatarUrl   String?  @map("avatar_url")
+  cursorColor String   @default("hsl(239, 84%, 67%)") @map("cursor_color")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  ownedProjects      Project[]            @relation("ProjectOwner")
+  projectMemberships ProjectMembership[]
+  snapshots          Snapshot[]
+  aiAgents           AIAgent[]
+
+  @@map("users")
+}
+
+// ─── Project / Workspace ─────────────────────────────────────────────────
+
+model Project {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String
+  description String?
+  language    String   @default("TypeScript")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Owner
+  ownerId String @map("owner_id") @db.Uuid
+  owner   User   @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+
+  // Relations
+  memberships ProjectMembership[]
+  snapshots   Snapshot[]
+  aiAgents    AIAgent[]
+
+  @@map("projects")
+}
+
+// ─── Project Membership (many-to-many) ───────────────────────────────────
+
+enum ProjectRole {
+  OWNER
+  EDITOR
+  VIEWER
+}
+
+model ProjectMembership {
+  id        String      @id @default(uuid()) @db.Uuid
+  role      ProjectRole @default(EDITOR)
+  joinedAt  DateTime    @default(now()) @map("joined_at")
+
+  userId    String  @map("user_id") @db.Uuid
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  projectId String  @map("project_id") @db.Uuid
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, projectId])
+  @@map("project_memberships")
+}
+
+// ─── CRDT Snapshots (Time-Travel) ────────────────────────────────────────
+// Periodic serialization of the Yjs document state vector.
+
+model Snapshot {
+  id          String   @id @default(uuid()) @db.Uuid
+  label       String?
+  changeCount Int      @default(0) @map("change_count")
+  blob        Bytes    // Serialized Yjs state vector
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  projectId String  @map("project_id") @db.Uuid
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  userId String @map("user_id") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@index([projectId, createdAt])
+  @@map("snapshots")
+}
+
+// ─── AI Agent Profiles ───────────────────────────────────────────────────
+
+model AIAgent {
+  id           String  @id @default(uuid()) @db.Uuid
+  name         String
+  persona      String  // e.g. "Frontend Lead", "Security Auditor"
+  systemPrompt String  @map("system_prompt") @db.Text
+  color        String  @default("hsl(172, 66%, 50%)")
+  isActive     Boolean @default(false) @map("is_active")
+
+  projectId String  @map("project_id") @db.Uuid
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdById String @map("created_by_id") @db.Uuid
+  createdBy   User   @relation(fields: [createdById], references: [id])
+
+  @@map("ai_agents")
+}

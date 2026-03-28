@@ -11,9 +11,9 @@
    Shades are created by stepping Lightness with constant H+S.
    ═══════════════════════════════════════════════════════════════════════════ */
 
+/* ─── Dark Mode (Default) ───────────────────────────────────────────────── */
 :root {
-  /* —— Background Scale ——
-     hsl(230, 13%, L%)  — cool blue-gray, non-fatiguing dark */
+  /* Background Scale — cool blue-gray, non-fatiguing */
   --bg-base:       hsl(230, 13%, 7%);
   --bg-surface:    hsl(230, 13%, 10%);
   --bg-elevated:   hsl(230, 13%, 13%);
@@ -21,52 +21,44 @@
   --bg-active:     hsl(230, 13%, 20%);
   --bg-terminal:   hsl(230, 18%, 5%);
 
-  /* —— Text Scale ——
-     hsl(224, S%, L%)  — off-white for comfort, no halation */
+  /* Text Scale — off-white to avoid halation */
   --text-primary:    hsl(224, 20%, 88%);
   --text-secondary:  hsl(224, 12%, 55%);
   --text-tertiary:   hsl(224, 8%, 36%);
 
-  /* —— Brand / Primary (Indigo) ——
-     hsl(239, 84%, 67%) ≈ #6366f1 — vibrant, creative, collaborative */
+  /* Brand / Primary (Indigo) */
   --brand:               hsl(239, 84%, 67%);
   --brand-hover:         hsl(239, 84%, 74%);
-  --brand-foreground:    hsl(230, 40%, 6%);
+  --brand-foreground:    hsl(230, 40%, 98%);
   --brand-muted:         hsla(239, 84%, 67%, 0.10);
   --brand-muted-border:  hsla(239, 84%, 67%, 0.25);
   --brand-glow:          hsla(239, 84%, 67%, 0.20);
 
-  /* —— AI / Agent (Teal) ——
-     Visual distinction: AI = teal, Human = indigo */
+  /* AI / Agent (Teal) — visual distinction: AI = teal, Human = indigo */
   --ai:               hsl(172, 66%, 50%);
   --ai-foreground:    hsl(230, 40%, 6%);
   --ai-muted:         hsla(172, 66%, 50%, 0.10);
   --ai-muted-border:  hsla(172, 66%, 50%, 0.25);
   --ai-glow:          hsla(172, 66%, 50%, 0.20);
 
-  /* —— Semantic: Success —— */
+  /* Semantic */
   --success:        hsl(150, 55%, 48%);
   --success-muted:  hsla(150, 55%, 48%, 0.10);
-
-  /* —— Semantic: Warning —— */
   --warning:        hsl(38, 85%, 55%);
   --warning-muted:  hsla(38, 85%, 55%, 0.10);
-
-  /* —— Semantic: Error —— */
   --error:              hsl(0, 62%, 55%);
   --error-muted:        hsla(0, 62%, 55%, 0.10);
   --error-muted-border: hsla(0, 62%, 55%, 0.25);
 
-  /* —— Borders ——
-     Translucent blue-gray for subtle depth */
+  /* Borders — translucent blue-gray */
   --border-subtle:  hsla(230, 20%, 50%, 0.08);
   --border-default: hsla(230, 20%, 50%, 0.12);
   --border-strong:  hsla(230, 20%, 50%, 0.20);
 
-  /* —— Focus —— */
+  /* Focus */
   --ring: hsl(239, 84%, 67%);
 
-  /* —— Radius —— */
+  /* Radius */
   --radius: 0.625rem;
 
   /* ═══ shadcn/ui Compatibility Layer ═══ */
@@ -90,6 +82,45 @@
   --input:                var(--bg-elevated);
 }
 
+/* ─── Light Mode ────────────────────────────────────────────────────────── */
+.light {
+  --bg-base:       hsl(230, 20%, 98%);
+  --bg-surface:    hsl(230, 20%, 96%);
+  --bg-elevated:   hsl(230, 15%, 100%);
+  --bg-hover:      hsl(230, 15%, 93%);
+  --bg-active:     hsl(230, 15%, 88%);
+  --bg-terminal:   hsl(230, 15%, 96%);
+
+  --text-primary:    hsl(224, 40%, 12%);
+  --text-secondary:  hsl(224, 15%, 45%);
+  --text-tertiary:   hsl(224, 10%, 60%);
+
+  --brand:               hsl(239, 84%, 57%);
+  --brand-hover:         hsl(239, 84%, 50%);
+  --brand-foreground:    hsl(0, 0%, 100%);
+  --brand-muted:         hsla(239, 84%, 57%, 0.08);
+  --brand-muted-border:  hsla(239, 84%, 57%, 0.20);
+  --brand-glow:          hsla(239, 84%, 57%, 0.12);
+
+  --ai:               hsl(172, 66%, 38%);
+  --ai-foreground:    hsl(0, 0%, 100%);
+  --ai-muted:         hsla(172, 66%, 38%, 0.08);
+  --ai-muted-border:  hsla(172, 66%, 38%, 0.20);
+  --ai-glow:          hsla(172, 66%, 38%, 0.12);
+
+  --success:        hsl(150, 55%, 38%);
+  --success-muted:  hsla(150, 55%, 38%, 0.08);
+  --warning:        hsl(38, 85%, 45%);
+  --warning-muted:  hsla(38, 85%, 45%, 0.08);
+  --error:              hsl(0, 62%, 48%);
+  --error-muted:        hsla(0, 62%, 48%, 0.08);
+  --error-muted-border: hsla(0, 62%, 48%, 0.20);
+
+  --border-subtle:  hsla(230, 20%, 50%, 0.08);
+  --border-default: hsla(230, 20%, 50%, 0.15);
+  --border-strong:  hsla(230, 20%, 50%, 0.25);
+}
+
 /* ═══ Tailwind v4 Theme Tokens ═══ */
 @theme inline {
   /* Backgrounds */
@@ -107,15 +138,17 @@
   --color-text-tertiary:  var(--text-tertiary);
 
   /* Brand */
-  --color-brand:            var(--brand);
-  --color-brand-hover:      var(--brand-hover);
-  --color-brand-foreground: var(--brand-foreground);
-  --color-brand-muted:      var(--brand-muted);
+  --color-brand:              var(--brand);
+  --color-brand-hover:        var(--brand-hover);
+  --color-brand-foreground:   var(--brand-foreground);
+  --color-brand-muted:        var(--brand-muted);
+  --color-brand-muted-border: var(--brand-muted-border);
 
   /* AI */
-  --color-ai:            var(--ai);
-  --color-ai-foreground: var(--ai-foreground);
-  --color-ai-muted:      var(--ai-muted);
+  --color-ai:              var(--ai);
+  --color-ai-foreground:   var(--ai-foreground);
+  --color-ai-muted:        var(--ai-muted);
+  --color-ai-muted-border: var(--ai-muted-border);
 
   /* Semantic */
   --color-success:       var(--success);
@@ -126,9 +159,10 @@
   --color-error-muted:   var(--error-muted);
 
   /* Borders */
-  --color-border:        var(--border);
-  --color-border-subtle: var(--border-subtle);
-  --color-border-strong: var(--border-strong);
+  --color-border:         var(--border);
+  --color-border-default: var(--border-default);
+  --color-border-subtle:  var(--border-subtle);
+  --color-border-strong:  var(--border-strong);
 
   /* shadcn compat */
   --color-card:                 var(--card);
@@ -160,7 +194,6 @@
 
 /* ═══ Base Layer ═══ */
 @layer base {
-  /* Scrollbar — thin, translucent, rounded */
   ::-webkit-scrollbar              { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track        { background: transparent; }
   ::-webkit-scrollbar-thumb        { background: hsla(230, 20%, 50%, 0.12); border-radius: 99px; }
@@ -173,7 +206,6 @@
     font-size: 14px;
   }
 
-  /* Text selection */
   ::selection {
     background: hsla(239, 84%, 67%, 0.22);
     color: var(--text-primary);
@@ -181,8 +213,6 @@
 }
 
 /* ═══ Utilities ═══ */
-
-/* Skeleton shimmer for loading states */
 @keyframes shimmer {
   0%   { background-position: -200% 0; }
   100% { background-position:  200% 0; }
@@ -199,14 +229,12 @@
   animation: shimmer 1.5s ease-in-out infinite;
 }
 
-/* Glass effect for floating elements */
 .glass {
   background: hsla(230, 13%, 10%, 0.80);
   backdrop-filter: blur(16px) saturate(1.2);
   -webkit-backdrop-filter: blur(16px) saturate(1.2);
 }
 
-/* Glow ring for focused/active elements */
 .glow-brand {
   box-shadow:
     0 0 0 1px var(--brand-muted-border),
@@ -217,4 +245,10 @@
   box-shadow:
     0 0 0 1px var(--ai-muted-border),
     0 0 20px var(--ai-glow);
+}
+
+.glow-error {
+  box-shadow:
+    0 0 0 1px var(--error-muted-border),
+    0 0 20px hsla(0, 62%, 55%, 0.15);
 }
