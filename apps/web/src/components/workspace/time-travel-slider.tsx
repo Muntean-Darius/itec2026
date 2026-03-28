@@ -81,6 +81,10 @@ function getKindLabel(kind: SnapshotKind) {
   }
 }
 
+function getSnapshotActorLabel(snapshot: Snapshot): string {
+  return snapshot.userName?.trim() || "Unknown user"
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface TimeTravelSliderProps {
@@ -177,6 +181,43 @@ export function TimeTravelSlider({
     [filteredSnapshots, onScrub]
   )
 
+  // Drag interaction on the track
+  const isDragging = useRef(false)
+
+  const scrubFromPointer = useCallback(
+    (clientX: number) => {
+      const track = trackRef.current
+      if (!track || filteredSnapshots.length === 0) return
+      const rect = track.getBoundingClientRect()
+      const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
+      const idx = Math.round(pct * (filteredSnapshots.length - 1))
+      setActiveIndex(idx)
+      onScrub(filteredSnapshots[idx])
+    },
+    [filteredSnapshots, onScrub]
+  )
+
+  const handleTrackPointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      isDragging.current = true
+      ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+      scrubFromPointer(e.clientX)
+    },
+    [scrubFromPointer]
+  )
+
+  const handleTrackPointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      if (!isDragging.current) return
+      scrubFromPointer(e.clientX)
+    },
+    [scrubFromPointer]
+  )
+
+  const handleTrackPointerUp = useCallback(() => {
+    isDragging.current = false
+  }, [])
+
   // Keyboard navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -256,7 +297,7 @@ export function TimeTravelSlider({
                   <>
                     <span className="text-text-tertiary">{getKindLabel(active.kind)}</span>
                     <span className="mx-1.5">•</span>
-                    <span>{active.userId}</span>
+                    <span>{getSnapshotActorLabel(active)}</span>
                     {active.filePath && (
                       <>
                         <span className="mx-1.5">•</span>
@@ -301,26 +342,30 @@ export function TimeTravelSlider({
             <span>Now</span>
           </div>
 
-          {/* Track with nodes */}
+          {/* Unified interactive track */}
           <div
             ref={trackRef}
-            className="relative h-12 cursor-pointer select-none"
+            className="relative h-12 cursor-pointer select-none touch-none"
+            onPointerDown={handleTrackPointerDown}
+            onPointerMove={handleTrackPointerMove}
+            onPointerUp={handleTrackPointerUp}
+            onPointerCancel={handleTrackPointerUp}
           >
             {/* Background track line */}
             <div className="absolute top-1/2 left-0 right-0 h-[2px] bg-border-subtle -translate-y-1/2 rounded-full" />
 
             {/* Progress indicator */}
             <div
-              className="absolute top-1/2 left-0 h-[2px] bg-brand -translate-y-1/2 rounded-full transition-all duration-75"
+              className="absolute top-1/2 left-0 h-[2px] bg-brand -translate-y-1/2 rounded-full transition-[width] duration-75"
               style={{
-                width: `${(activeIndex / (filteredSnapshots.length - 1)) * 100}%`,
+                width: `${(activeIndex / Math.max(1, filteredSnapshots.length - 1)) * 100}%`,
               }}
             />
 
             {/* Snapshot nodes */}
             <div className="absolute inset-0 flex items-center">
               {displayNodes.map((node) => {
-                const position = (node.index / (filteredSnapshots.length - 1)) * 100
+                const position = (node.index / Math.max(1, filteredSnapshots.length - 1)) * 100
                 const isActive = activeIndex === node.index
                 const isNearActive = Math.abs(activeIndex - node.index) <= 2
                 
@@ -403,7 +448,7 @@ export function TimeTravelSlider({
                           {node.snapshot.kind === "ai" && node.snapshot.promptSummary
                             ? node.snapshot.promptSummary
                             : node.snapshot.label ??
-                              `${node.snapshot.userId} typing${
+                              `${getSnapshotActorLabel(node.snapshot)} typing${
                                 node.snapshot.filePath ? ` in ${node.snapshot.filePath.split("/").pop()}` : ""
                               }`}
                         </p>
@@ -420,13 +465,14 @@ export function TimeTravelSlider({
 
             {/* Active position indicator (thumb) */}
             <div
-              className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-4 h-4 bg-white rounded-full shadow-lg border-2 border-brand cursor-grab active:cursor-grabbing transition-all pointer-events-none"
+              className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-5 h-5 bg-white rounded-full shadow-lg border-2 border-brand pointer-events-none transition-[left] duration-75"
               style={{
-                left: `${(activeIndex / (filteredSnapshots.length - 1)) * 100}%`,
+                left: `${(activeIndex / Math.max(1, filteredSnapshots.length - 1)) * 100}%`,
               }}
             />
           </div>
 
+          {/* Screen-reader accessible range (visually hidden) */}
           <input
             type="range"
             min={0}
@@ -434,7 +480,7 @@ export function TimeTravelSlider({
             step={1}
             value={activeIndex}
             onChange={(e) => handleSliderChange(Number(e.target.value))}
-            className="mt-3 h-2 w-full cursor-pointer accent-brand"
+            className="sr-only"
             aria-label="Time travel timeline"
           />
 

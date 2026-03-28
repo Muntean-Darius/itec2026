@@ -163,6 +163,12 @@ export async function getSnapshots(projectId: string): Promise<Snapshot[]> {
       promptSummary: true,
       filePath: true,
       fileStates: true,
+      user: {
+        select: {
+          name: true,
+          email: true,
+        },
+      },
     },
   })
 
@@ -173,6 +179,7 @@ export async function getSnapshots(projectId: string): Promise<Snapshot[]> {
     label: s.label,
     changeCount: s.changeCount,
     userId: s.userId,
+    userName: s.user?.name?.trim() || s.user?.email || undefined,
     kind: (s.kind as "cron" | "ai" | "human") ?? "cron",
     promptSummary: s.promptSummary,
     filePath: s.filePath,
