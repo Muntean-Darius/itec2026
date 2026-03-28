@@ -77,7 +77,10 @@ export async function updateProfile(formData: FormData) {
 
 // ─── Projects ────────────────────────────────────────────────────────────
 
-export async function createProject(formData: FormData) {
+export async function createProject(
+  _prevState: { error?: string } | null,
+  formData: FormData
+) {
   const user = await getAuthUser()
   if (!user) redirect("/login")
 
@@ -104,6 +107,26 @@ export async function createProject(formData: FormData) {
 
   revalidatePath("/dashboard")
   redirect(`/workspace/${project.id}`)
+}
+
+export async function deleteProject(projectId: string) {
+  const user = await getAuthUser()
+  if (!user) redirect("/login")
+
+  // Verify ownership
+  const membership = await prisma.projectMembership.findUnique({
+    where: { userId_projectId: { userId: user.id, projectId } },
+  })
+  if (!membership || membership.role !== "OWNER") {
+    return { error: "Only the owner can delete a project." }
+  }
+
+  // Delete memberships first, then the project
+  await prisma.projectMembership.deleteMany({ where: { projectId } })
+  await prisma.project.delete({ where: { id: projectId } })
+
+  revalidatePath("/dashboard")
+  return { success: true }
 }
 
 export async function updateProject(formData: FormData) {
