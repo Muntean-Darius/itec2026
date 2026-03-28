@@ -20,6 +20,53 @@ function randomCursorColor(): string {
   return `hsl(${hue}, 70%, 60%)`
 }
 
+const EXTENSION_LANGUAGE_MAP: Record<string, string> = {
+  ts: "TypeScript",
+  tsx: "TypeScript",
+  js: "JavaScript",
+  jsx: "JavaScript",
+  json: "JSON",
+  css: "CSS",
+  scss: "SCSS",
+  md: "Markdown",
+  html: "HTML",
+  py: "Python",
+}
+
+function inferLanguageFromFileStates(
+  fileStates: unknown,
+  fallbackLanguage: string
+): string {
+  if (!fileStates || typeof fileStates !== "object" || Array.isArray(fileStates)) {
+    return fallbackLanguage
+  }
+
+  const counts = new Map<string, number>()
+
+  for (const path of Object.keys(fileStates as Record<string, unknown>)) {
+    const fileName = path.split("/").pop() ?? path
+    const extension = fileName.includes(".") ? fileName.split(".").pop()?.toLowerCase() : ""
+    if (!extension) continue
+
+    const language = EXTENSION_LANGUAGE_MAP[extension]
+    if (!language) continue
+
+    counts.set(language, (counts.get(language) ?? 0) + 1)
+  }
+
+  let dominantLanguage = fallbackLanguage
+  let highestCount = 0
+
+  for (const [language, count] of counts.entries()) {
+    if (count > highestCount) {
+      dominantLanguage = language
+      highestCount = count
+    }
+  }
+
+  return dominantLanguage
+}
+
 // ─── Get or create user from Supabase auth ───────────────────────────────
 export const getAuthUser = cache(async () => {
   const supabase = await createClient()
@@ -74,6 +121,13 @@ export async function getProjects(): Promise<Project[]> {
           memberships: {
             include: { user: true },
           },
+          snapshots: {
+            orderBy: { createdAt: "desc" },
+            take: 1,
+            select: {
+              fileStates: true,
+            },
+          },
         },
       },
     },
@@ -84,7 +138,7 @@ export async function getProjects(): Promise<Project[]> {
     id: project.id,
     name: project.name,
     description: project.description,
-    language: project.language,
+    language: inferLanguageFromFileStates(project.snapshots[0]?.fileStates, project.language),
     createdAt: project.createdAt.toISOString(),
     updatedAt: project.updatedAt.toISOString(),
     ownerId: project.ownerId,
@@ -105,6 +159,13 @@ export async function getProject(id: string): Promise<Project | null> {
       memberships: {
         include: { user: true },
       },
+      snapshots: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        select: {
+          fileStates: true,
+        },
+      },
     },
   })
 
@@ -114,7 +175,7 @@ export async function getProject(id: string): Promise<Project | null> {
     id: project.id,
     name: project.name,
     description: project.description,
-    language: project.language,
+    language: inferLanguageFromFileStates(project.snapshots[0]?.fileStates, project.language),
     createdAt: project.createdAt.toISOString(),
     updatedAt: project.updatedAt.toISOString(),
     ownerId: project.ownerId,
