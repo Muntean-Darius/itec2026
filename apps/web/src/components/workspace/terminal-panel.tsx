@@ -4,8 +4,9 @@ import { useRef, useEffect, useState, useCallback } from "react"
 import { Terminal as TermIcon, Plus, X } from "lucide-react"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
+import { toast } from "sonner"
 import type { TerminalLine, PresenceUser } from "@/data/types"
-import type { TerminalSession } from "@/lib/collaboration"
+import type { TerminalSession, DockerStatus } from "@/lib/collaboration"
 
 interface TerminalPanelProps {
   isRunning: boolean
@@ -23,6 +24,10 @@ interface TerminalPanelProps {
   presenceUsers?: PresenceUser[]
   /** Current user's ID */
   currentUserId?: string
+  /** Docker container status */
+  dockerStatus?: DockerStatus
+  /** Docker error message */
+  dockerError?: string | null
 }
 
 export function TerminalPanel({
@@ -37,6 +42,8 @@ export function TerminalPanel({
   awareness,
   presenceUsers = [],
   currentUserId,
+  dockerStatus,
+  dockerError,
 }: TerminalPanelProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -49,6 +56,16 @@ export function TerminalPanel({
 
   const activeSession = sessions.find((s) => s.id === activeSessionId)
   const lines: TerminalLine[] = activeSession?.lines ?? []
+
+  // Show toast on Docker error
+  useEffect(() => {
+    if (dockerStatus === "error" && dockerError) {
+      toast.error("Docker Container Error", {
+        description: dockerError,
+        duration: 10_000,
+      })
+    }
+  }, [dockerStatus, dockerError])
 
   // Mark current session as read when viewing
   useEffect(() => {
@@ -243,10 +260,74 @@ export function TerminalPanel({
             <span className="text-xs text-success">Running</span>
           </span>
         )}
+
+        {!isRunning && dockerStatus && dockerStatus !== "ready" && (
+          <span className="ml-auto flex items-center gap-1.5 pr-2">
+            {dockerStatus === "creating" && (
+              <>
+                <span className="relative flex h-2 w-2">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-warning opacity-75" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-warning" />
+                </span>
+                <span className="text-xs text-warning">Docker starting...</span>
+              </>
+            )}
+            {dockerStatus === "error" && (
+              <>
+                <span className="relative flex h-2 w-2">
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-error" />
+                </span>
+                <span className="text-xs text-error">Docker error</span>
+              </>
+            )}
+          </span>
+        )}
+
+        {!isRunning && dockerStatus === "ready" && (
+          <span className="ml-auto flex items-center gap-1.5 pr-2">
+            <span className="relative flex h-2 w-2">
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-success" />
+            </span>
+            <span className="text-xs text-success">Docker ready</span>
+          </span>
+        )}
       </div>
 
+      {/* Docker loading overlay */}
+      {dockerStatus && dockerStatus !== "ready" && activeSession && (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-text-tertiary">
+          {dockerStatus === "creating" && (
+            <>
+              <div className="flex items-center gap-2">
+                <svg className="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                <span className="text-sm font-medium">Starting Docker instance...</span>
+              </div>
+              <span className="text-xs text-text-tertiary">
+                Your workspace container is being prepared. This usually takes a few seconds.
+              </span>
+            </>
+          )}
+          {dockerStatus === "error" && (
+            <>
+              <span className="text-sm font-medium text-error">Docker instance failed to start</span>
+              {dockerError && (
+                <code className="max-w-md rounded-md bg-elevated px-3 py-2 text-xs text-error/80 break-all">
+                  {dockerError}
+                </code>
+              )}
+              <span className="text-xs text-text-tertiary">
+                Try refreshing the page. If the problem persists, contact support.
+              </span>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Terminal output for active session */}
-      {activeSession ? (
+      {dockerStatus === "ready" && activeSession ? (
         <ScrollArea
           className="flex-1 font-mono text-xs"
           onClick={() => inputRef.current?.focus()}

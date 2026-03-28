@@ -10,6 +10,7 @@ import { Server as SocketIOServer } from "socket.io"
 import cors from "cors"
 import { setupCollaboration, setSnapshotStore } from "./collaboration.js"
 import { saveSnapshotToDB } from "./snapshot-store.js"
+import { destroyAllContainers } from "./docker-manager.js"
 
 const PORT = parseInt(process.env.PORT || "4000", 10)
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:3000"
@@ -44,3 +45,12 @@ httpServer.listen(PORT, () => {
   console.log(`[iTECify] Collaboration server running on port ${PORT}`)
   console.log(`[iTECify] CORS origin: ${CORS_ORIGIN}`)
 })
+
+// Graceful shutdown — destroy Docker containers
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  process.on(signal, async () => {
+    console.log(`[iTECify] ${signal} received — cleaning up Docker containers...`)
+    await destroyAllContainers()
+    process.exit(0)
+  })
+}

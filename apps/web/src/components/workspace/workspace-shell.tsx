@@ -643,6 +643,8 @@ export function WorkspaceShell({
                   awareness={collab.getAwareness()}
                   presenceUsers={livePresence}
                   currentUserId={currentUser.id}
+                  dockerStatus={collab.dockerStatus}
+                  dockerError={collab.dockerError}
                 />
               </div>
             </>
@@ -691,6 +693,78 @@ export function WorkspaceShell({
             </aside>
           </>
         )}
+      </div>
+
+      {/* ─── Status Bar ─── */}
+      <div className="flex h-6 shrink-0 items-center justify-between border-t border-border-subtle bg-surface px-3 text-[11px] text-text-tertiary">
+        <div className="flex items-center gap-3">
+          {collab.dockerStatus === "ready" && (
+            <span className="flex items-center gap-1">
+              <span className="inline-flex h-1.5 w-1.5 rounded-full bg-success" />
+              Docker
+            </span>
+          )}
+          {collab.dockerStatus === "creating" && (
+            <span className="flex items-center gap-1">
+              <span className="inline-flex h-1.5 w-1.5 animate-pulse rounded-full bg-warning" />
+              Docker starting...
+            </span>
+          )}
+          {collab.dockerStatus === "error" && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="flex cursor-help items-center gap-1">
+                  <span className="inline-flex h-1.5 w-1.5 rounded-full bg-error" />
+                  <span className="text-error">Docker error</span>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>{collab.dockerError || "Unknown error"}</TooltipContent>
+            </Tooltip>
+          )}
+          {collab.connected && (
+            <span className="flex items-center gap-1">
+              <span className="inline-flex h-1.5 w-1.5 rounded-full bg-success" />
+              Connected
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          {collab.dockerStats && collab.dockerStatus === "ready" && (
+            <>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="flex items-center gap-1 tabular-nums">
+                    <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <rect x="4" y="4" width="16" height="16" rx="2" />
+                      <path d="M9 9h6v6H9z" />
+                    </svg>
+                    {collab.dockerStats.cpuPercent}%
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>CPU Usage</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="flex items-center gap-1 tabular-nums">
+                    <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <rect x="3" y="3" width="7" height="7" rx="1" />
+                      <rect x="14" y="3" width="7" height="7" rx="1" />
+                      <rect x="3" y="14" width="7" height="7" rx="1" />
+                      <rect x="14" y="14" width="7" height="7" rx="1" />
+                    </svg>
+                    {collab.dockerStats.memoryUsageMB} / {collab.dockerStats.memoryLimitMB} MB
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Memory: {collab.dockerStats.memoryPercent}% used
+                </TooltipContent>
+              </Tooltip>
+            </>
+          )}
+          {activeFilePath && (
+            <span className="tabular-nums">{activeFilePath}</span>
+          )}
+        </div>
       </div>
 
       {/* Share / Invite Dialog */}
