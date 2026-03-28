@@ -22,7 +22,7 @@ import {
 } from "lucide-react"
 import Link from "next/link"
 import type { User, Project, FileNode, PresenceUser, AIAgent, Snapshot } from "@/data/types"
-import { updateProject } from "@/app/actions"
+import { updateProject, createSnapshot } from "@/app/actions"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
 import { Separator } from "@/components/ui/separator"
@@ -31,7 +31,7 @@ import { Input } from "@/components/ui/input"
 import { ResizeHandle } from "@/components/ui/resize-handle"
 import { PresenceDock } from "./presence-dock"
 import { FileTree, getFileIcon } from "./file-tree"
-import { CodeEditor, type AIBlock } from "./code-editor"
+import { CodeEditor, type AIBlock, type RecentAIAccept, type RecentAIUndo } from "./code-editor"
 import { TerminalPanel } from "./terminal-panel"
 import { CommandPalette } from "./command-palette"
 import { TimeTravelSlider } from "./time-travel-slider"
@@ -78,8 +78,14 @@ export function WorkspaceShell({
   })
 
   // Use collab files + presence, with initialPresence as fallback
-  const files = collab.files.length > 0 ? collab.files : initialFiles
+  const liveFiles = collab.files.length > 0 ? collab.files : initialFiles
   const livePresence = collab.presence.length > 0 ? collab.presence : initialPresence
+  const [timelineSnapshots, setTimelineSnapshots] = useState<Snapshot[]>(
+    () =>
+      [...snapshots].sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      )
+  )
 
   const [activeFilePath, setActiveFilePath] = useState<string>(
     initialFiles[0]?.path ?? ""
@@ -101,6 +107,7 @@ export function WorkspaceShell({
   // Workspace state
   const [isRunning, setIsRunning] = useState(false)
   const [timeTravelActive, setTimeTravelActive] = useState(false)
+  const [timeTravelSnapshot, setTimeTravelSnapshot] = useState<Snapshot | null>(null)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [aiPromptOpen, setAiPromptOpen] = useState(false)
   const [newFileDialogOpen, setNewFileDialogOpen] = useState(false)
@@ -108,11 +115,80 @@ export function WorkspaceShell({
   const [linkCopied, setLinkCopied] = useState(false)
   const [tabContextMenu, setTabContextMenu] = useState<{ x: number; y: number; path: string } | null>(null)
 
+  useEffect(() => {
+    setTimelineSnapshots(
+      [...snapshots].sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      )
+    )
+  }, [snapshots])
+
+  const resolveSnapshotFileStates = useCallback(
+    (snapshot: Snapshot | null): Record<string, string> | null => {
+      if (!snapshot) return null
+      if (snapshot.fileStates) return snapshot.fileStates
+
+      const idx = timelineSnapshots.findIndex((s) => s.id === snapshot.id)
+      if (idx === -1) return null
+
+      for (let i = idx - 1; i >= 0; i--) {
+        if (timelineSnapshots[i].fileStates) {
+          return timelineSnapshots[i].fileStates ?? null
+        }
+      }
+      return null
+    },
+    [timelineSnapshots]
+  )
+
+  // When time-traveling, show historical files from the selected snapshot state.
+  // Otherwise fall back to current files.
+  const files = useMemo(() => {
+    const resolvedFileStates = resolveSnapshotFileStates(timeTravelSnapshot)
+    if (timeTravelActive && resolvedFileStates) {
+      // Convert snapshot fileStates to FileNode array
+      return Object.entries(resolvedFileStates).map(([path, content]) => ({
+        path,
+        content,
+        language: path.endsWith(".ts") || path.endsWith(".tsx")
+          ? "typescript"
+          : path.endsWith(".js") || path.endsWith(".jsx")
+            ? "javascript"
+            : path.endsWith(".json")
+              ? "json"
+              : path.endsWith(".md")
+                ? "markdown"
+                : "plaintext",
+      }))
+    }
+    return liveFiles
+  }, [timeTravelActive, timeTravelSnapshot, liveFiles, resolveSnapshotFileStates])
+
   // Active terminal session
   const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null)
 
   // AI streaming messages: messageId → accumulated text
   const [streamingMessages, setStreamingMessages] = useState<Record<string, string>>({})
+
+  // Recent AI accepts for quick-undo (expires after 15 seconds)
+  const [recentAIAccepts, setRecentAIAccepts] = useState<RecentAIAccept[]>([])
+  
+  // Recent AI undos for redo (expires after 15 seconds)
+  const [recentAIUndos, setRecentAIUndos] = useState<RecentAIUndo[]>([])
+
+  // Cleanup expired accepts and undos periodically
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now()
+      setRecentAIAccepts((prev) =>
+        prev.filter((a) => now - a.acceptedAt < 15000)
+      )
+      setRecentAIUndos((prev) =>
+        prev.filter((u) => now - u.undoneAt < 15000)
+      )
+    }, 5000)
+    return () => clearInterval(interval)
+  }, [])
 
   // Subscribe to AI stream chunks
   useEffect(() => {
@@ -165,6 +241,16 @@ export function WorkspaceShell({
   }, [collab.terminalSessions, activeTerminalId])
 
   const activeFile = files.find((f) => f.path === activeFilePath)
+
+  useEffect(() => {
+    if (!timeTravelActive) return
+    if (files.length === 0) return
+    if (!files.some((f) => f.path === activeFilePath)) {
+      const fallbackPath = files[0].path
+      setActiveFilePath(fallbackPath)
+      setOpenFiles([fallbackPath])
+    }
+  }, [timeTravelActive, files, activeFilePath])
 
   const handleSaveTitle = useCallback(async () => {
     if (!projectName.trim()) {
@@ -237,6 +323,82 @@ export function WorkspaceShell({
     [handleOpenFile, collab]
   )
 
+  const buildCurrentFileStates = useCallback((): Record<string, string> => {
+    const entries = liveFiles.map((f) => [f.path, f.content] as const)
+    return Object.fromEntries(entries)
+  }, [liveFiles])
+
+  const createLocalSnapshot = useCallback(
+    (
+      kind: "cron" | "ai" | "human",
+      opts?: {
+        label?: string | null
+        promptSummary?: string
+        filePath?: string
+        fileStates?: Record<string, string>
+      }
+    ): Promise<Snapshot> => {
+      const snapshot: Snapshot = {
+        id: `local-${kind}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        projectId: project.id,
+        createdAt: new Date().toISOString(),
+        label: opts?.label ?? null,
+        changeCount: 1,
+        userId: currentUser.id,
+        kind,
+        promptSummary: opts?.promptSummary,
+        filePath: opts?.filePath ?? (activeFilePath || liveFiles[0]?.path),
+        fileStates: opts?.fileStates ?? buildCurrentFileStates(),
+      }
+      setTimelineSnapshots((prev) =>
+        [...prev, snapshot].sort(
+          (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+        )
+      )
+
+      void createSnapshot({
+        projectId: project.id,
+        kind,
+        label: snapshot.label,
+        promptSummary: snapshot.promptSummary,
+        filePath: snapshot.filePath,
+        fileStates: snapshot.fileStates,
+        changeCount: snapshot.changeCount,
+      }).then((result) => {
+        if (!result.snapshot) return
+        setTimelineSnapshots((prev) =>
+          [...prev.filter((s) => s.id !== snapshot.id), result.snapshot!].sort(
+            (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+          )
+        )
+      })
+
+      return Promise.resolve(snapshot)
+    },
+    [project.id, currentUser.id, activeFilePath, liveFiles, buildCurrentFileStates]
+  )
+
+  const handleToggleTimeTravel = useCallback(() => {
+    setTimeTravelActive((prev) => {
+      const next = !prev
+      if (next) {
+        setTimeTravelSnapshot(timelineSnapshots[timelineSnapshots.length - 1] ?? null)
+      } else {
+        setTimeTravelSnapshot(null)
+      }
+      return next
+    })
+  }, [timelineSnapshots])
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (timeTravelActive) return
+      if (liveFiles.length === 0) return
+      void createLocalSnapshot("cron")
+    }, 60_000)
+    return () => clearInterval(interval)
+  }, [timeTravelActive, liveFiles.length, createLocalSnapshot])
+
   // Resize handlers
   const handleSidebarResize = useCallback(
     (delta: number) => {
@@ -282,6 +444,93 @@ export function WorkspaceShell({
     }
     return blocks
   }, [activeFilePath, collab.aiChatSessions, collab.aiAgents, agents])
+
+  // Handler for AI block actions that also tracks accepts for quick-undo
+  const handleAIBlockAction = useCallback(
+    (chatId: string, messageId: string, opIndex: number, action: "accept" | "reject") => {
+      if (action === "accept" && activeFile) {
+        // Track this accept for quick-undo
+        const block = activeFileAIBlocks.find(
+          (b) => b.chatId === chatId && b.messageId === messageId && b.operationIndex === opIndex
+        )
+        const content = block?.operation.content
+        if (block && content) {
+          setRecentAIAccepts((prev) => [
+            ...prev,
+            {
+              messageId,
+              chatId,
+              operationIndex: opIndex,
+              originalContent: activeFile.content,
+              newContent: content,
+              acceptedAt: Date.now(),
+              filePath: activeFile.path,
+              startLine: 1, // In production, calculate from operation
+            },
+          ])
+
+          void createLocalSnapshot("ai", {
+            promptSummary: `AI ${block.operation.type}d ${block.operation.path}`,
+            filePath: block.operation.path,
+          })
+        }
+      }
+      // Call the actual collab action
+      collab.aiOperationAction(chatId, messageId, opIndex, action)
+    },
+    [activeFile, activeFileAIBlocks, collab, createLocalSnapshot]
+  )
+
+  // Handler for quick-undo
+  const handleQuickUndo = useCallback(
+    (accept: RecentAIAccept) => {
+      // Revert the file content using the original content
+      collab.updateFileContent(accept.filePath, accept.originalContent)
+      
+      // Remove from recent accepts
+      setRecentAIAccepts((prev) =>
+        prev.filter((a) => a.messageId !== accept.messageId)
+      )
+      
+      // Add to recent undos for potential redo
+      setRecentAIUndos((prev) => [
+        ...prev,
+        {
+          messageId: accept.messageId,
+          originalContent: accept.originalContent,
+          newContent: accept.newContent,
+          undoneAt: Date.now(),
+          filePath: accept.filePath,
+          startLine: accept.startLine,
+        },
+      ])
+      
+      // Show toast
+      import("sonner").then(({ toast }) => {
+        toast.success("AI change reverted")
+      })
+    },
+    [collab]
+  )
+
+  // Handler for quick-redo
+  const handleQuickRedo = useCallback(
+    (undo: RecentAIUndo) => {
+      // Restore the AI-generated content
+      collab.updateFileContent(undo.filePath, undo.newContent)
+      
+      // Remove from recent undos
+      setRecentAIUndos((prev) =>
+        prev.filter((u) => u.messageId !== undo.messageId)
+      )
+      
+      // Show toast
+      import("sonner").then(({ toast }) => {
+        toast.success("AI change restored")
+      })
+    },
+    [collab]
+  )
 
   return (
     <div className="flex h-full flex-col bg-background">
@@ -416,15 +665,17 @@ export function WorkspaceShell({
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
-                variant="ghost"
+                variant={timeTravelActive ? "secondary" : "ghost"}
                 size="icon"
                 className="h-7 w-7"
-                onClick={() => setTimeTravelActive(!timeTravelActive)}
+                onClick={handleToggleTimeTravel}
               >
                 <History className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Time Travel</TooltipContent>
+            <TooltipContent>
+              Time Travel <kbd className="ml-1.5 text-[10px] text-text-tertiary">⌘⇧T</kbd>
+            </TooltipContent>
           </Tooltip>
 
           <Tooltip>
@@ -574,11 +825,15 @@ export function WorkspaceShell({
                   key={activeFilePath}
                   file={activeFile}
                   readOnly={timeTravelActive}
-                  yText={collab.getYText(activeFilePath)}
-                  awareness={collab.getAwareness()}
+                  yText={timeTravelActive ? undefined : collab.getYText(activeFilePath)}
+                  awareness={timeTravelActive ? undefined : collab.getAwareness()}
                   onContentChange={(content) => collab.updateFileContent(activeFile.path, content)}
                   aiBlocks={activeFileAIBlocks}
-                  onAIBlockAction={collab.aiOperationAction}
+                  onAIBlockAction={handleAIBlockAction}
+                  recentAccepts={recentAIAccepts}
+                  recentUndos={recentAIUndos}
+                  onQuickUndo={handleQuickUndo}
+                  onQuickRedo={handleQuickRedo}
                 />
               </>
             ) : (
@@ -587,20 +842,31 @@ export function WorkspaceShell({
               </div>
             )}
 
-            {/* Time-Travel overlay */}
+            {/* Time-Travel overlay — full vignette when viewing past */}
             <AnimatePresence>
               {timeTravelActive && (
                 <motion.div
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  className="pointer-events-none absolute inset-0"
+                  transition={{ duration: 0.3 }}
+                  className="pointer-events-none absolute inset-0 z-20"
                   style={{
-                    background:
-                      "linear-gradient(180deg, transparent 80%, hsla(239, 84%, 67%, 0.05) 100%)",
-                    boxShadow: "inset 0 0 60px hsla(239, 84%, 67%, 0.03)",
+                    background: `
+                      radial-gradient(ellipse at center, transparent 40%, hsla(230, 13%, 7%, 0.4) 100%),
+                      linear-gradient(180deg, hsla(230, 13%, 7%, 0.1) 0%, transparent 20%, transparent 80%, hsla(239, 84%, 67%, 0.08) 100%)
+                    `,
+                    boxShadow: "inset 0 0 100px hsla(230, 13%, 7%, 0.3)",
                   }}
-                />
+                >
+                  {/* "Viewing Past" indicator badge */}
+                  <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-2 px-3 py-1.5 rounded-full bg-elevated/90 border border-brand-muted-border backdrop-blur-sm">
+                    <div className="w-2 h-2 rounded-full bg-warning animate-pulse" />
+                    <span className="text-xs font-medium text-text-secondary">
+                      Viewing historical state — Read only
+                    </span>
+                  </div>
+                </motion.div>
               )}
             </AnimatePresence>
 
@@ -652,8 +918,78 @@ export function WorkspaceShell({
           <AnimatePresence>
             {timeTravelActive && (
               <TimeTravelSlider
-                snapshots={snapshots}
-                onClose={() => setTimeTravelActive(false)}
+                snapshots={timelineSnapshots}
+                onClose={() => {
+                  setTimeTravelActive(false)
+                  setTimeTravelSnapshot(null)
+                }}
+                onRestore={(snapshot) => {
+                  void createLocalSnapshot("human", {
+                    label: "Checkpoint before restore",
+                  })
+
+                  const restoredState = resolveSnapshotFileStates(snapshot)
+                  if (restoredState) {
+                    const restoredEntries = Object.entries(restoredState)
+                    const restoredPaths = new Set(restoredEntries.map(([path]) => path))
+                    const livePaths = new Set(liveFiles.map((f) => f.path))
+
+                    for (const livePath of livePaths) {
+                      if (!restoredPaths.has(livePath)) {
+                        collab.deleteFile(livePath)
+                      }
+                    }
+
+                    for (const [path, content] of restoredEntries) {
+                      collab.updateFileContent(path, content)
+                    }
+
+                    const firstPath = restoredEntries[0]?.[0]
+                    if (firstPath) {
+                      setActiveFilePath(firstPath)
+                      setOpenFiles([firstPath])
+                    }
+                  }
+
+                  setTimeTravelActive(false)
+                  setTimeTravelSnapshot(null)
+                  // Show toast confirmation
+                  if (typeof window !== "undefined") {
+                    const time = new Date(snapshot.createdAt).toLocaleTimeString("en-US", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      hour12: true,
+                    })
+                    // Using sonner toast
+                    import("sonner").then(({ toast }) => {
+                      toast.success(`Workspace restored to ${time}`)
+                    })
+                  }
+
+                  void createLocalSnapshot("human", {
+                    label: `Restored to ${new Date(snapshot.createdAt).toLocaleTimeString("en-US", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      hour12: true,
+                    })}`,
+                    fileStates: restoredState ?? undefined,
+                  })
+                }}
+                onScrub={(snapshot) => {
+                  const resolvedFileStates = resolveSnapshotFileStates(snapshot)
+                  const nextSnapshot = resolvedFileStates ? { ...snapshot, fileStates: resolvedFileStates } : snapshot
+                  setTimeTravelSnapshot(nextSnapshot)
+
+                  const stateEntries = Object.entries(nextSnapshot.fileStates ?? {})
+                  if (stateEntries.length > 0) {
+                    const hasActive = stateEntries.some(([path]) => path === activeFilePath)
+                    if (!hasActive) {
+                      const nextPath = stateEntries[0][0]
+                      setActiveFilePath(nextPath)
+                      setOpenFiles([nextPath])
+                    }
+                  }
+                }}
               />
             )}
           </AnimatePresence>
@@ -779,6 +1115,15 @@ export function WorkspaceShell({
         onRun={handleRun}
         onToggleAiPrompt={() => setAiPromptOpen((prev) => !prev)}
         onNewFile={() => setNewFileDialogOpen(true)}
+        onToggleTimeTravel={handleToggleTimeTravel}
+        onSaveSnapshot={() => {
+          void createLocalSnapshot("human", {
+            label: "Manual checkpoint",
+          })
+          import("sonner").then(({ toast }) => {
+            toast.success("Checkpoint saved")
+          })
+        }}
       />
     </div>
   )
@@ -792,6 +1137,8 @@ function KeyboardShortcuts({
   onRun,
   onToggleAiPrompt,
   onNewFile,
+  onToggleTimeTravel,
+  onSaveSnapshot,
 }: {
   onToggleCommandPalette: () => void
   onToggleSidebar: () => void
@@ -799,6 +1146,8 @@ function KeyboardShortcuts({
   onRun: () => void
   onToggleAiPrompt: () => void
   onNewFile: () => void
+  onToggleTimeTravel: () => void
+  onSaveSnapshot: () => void
 }) {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -808,7 +1157,7 @@ function KeyboardShortcuts({
         e.preventDefault()
         onToggleAiPrompt()
       }
-      if (isMeta && e.shiftKey && e.key === "p") {
+      if (isMeta && e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault()
         onToggleCommandPalette()
       }
@@ -820,9 +1169,21 @@ function KeyboardShortcuts({
         e.preventDefault()
         onToggleTerminal()
       }
-      if (isMeta && e.key === "r" && e.shiftKey) {
+      if (isMeta && e.shiftKey && e.key.toLowerCase() === "r") {
         e.preventDefault()
         onRun()
+      }
+      // Cmd+Shift+T for time travel (use keyCode to bypass browser shortcut)
+      // KeyCode 84 = T
+      if (isMeta && e.shiftKey && (e.key === "T" || e.key === "t" || e.keyCode === 84)) {
+        e.preventDefault()
+        e.stopPropagation()
+        onToggleTimeTravel()
+      }
+      // Cmd+S for manual snapshot/save
+      if (isMeta && e.key === "s") {
+        e.preventDefault()
+        onSaveSnapshot()
       }
       // "a" for new file (when not focused in an input/editor)
       if (
@@ -839,9 +1200,10 @@ function KeyboardShortcuts({
       }
     }
 
-    window.addEventListener("keydown", handler)
-    return () => window.removeEventListener("keydown", handler)
-  }, [onToggleCommandPalette, onToggleSidebar, onToggleTerminal, onRun, onToggleAiPrompt, onNewFile])
+    // Use capture phase to intercept before browser handles it
+    window.addEventListener("keydown", handler, true)
+    return () => window.removeEventListener("keydown", handler, true)
+  }, [onToggleCommandPalette, onToggleSidebar, onToggleTerminal, onRun, onToggleAiPrompt, onNewFile, onToggleTimeTravel, onSaveSnapshot])
 
   return null
 }

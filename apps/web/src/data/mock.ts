@@ -21,6 +21,7 @@ import type {
   AIZoneBlock,
   TerminalLine,
   Snapshot,
+  SnapshotKind,
 } from "./types"
 
 // ─── Users ───────────────────────────────────────────────────────────────────
@@ -369,57 +370,102 @@ export const mockTerminalLines: TerminalLine[] = [
 ]
 
 // ─── Time-Travel Snapshots ───────────────────────────────────────────────────
+// Generate 12 hours of snapshots with mixed types (cron every ~60s, AI & human checkpoints)
 
-export const mockSnapshots: Snapshot[] = [
-  {
-    id: "snap-1",
-    projectId: "proj-1",
-    createdAt: "2026-03-28T10:00:00Z",
-    label: "Initial setup",
-    changeCount: 45,
-    userId: "user-1",
-  },
-  {
-    id: "snap-2",
-    projectId: "proj-1",
-    createdAt: "2026-03-28T11:00:00Z",
-    label: null,
-    changeCount: 12,
-    userId: "user-2",
-  },
-  {
-    id: "snap-3",
-    projectId: "proj-1",
-    createdAt: "2026-03-28T12:00:00Z",
-    label: "Added components",
-    changeCount: 87,
-    userId: "user-1",
-  },
-  {
-    id: "snap-4",
-    projectId: "proj-1",
-    createdAt: "2026-03-28T13:00:00Z",
-    label: null,
-    changeCount: 23,
-    userId: "user-3",
-  },
-  {
-    id: "snap-5",
-    projectId: "proj-1",
-    createdAt: "2026-03-28T14:00:00Z",
-    label: "Refactored utils",
-    changeCount: 56,
-    userId: "user-1",
-  },
-  {
-    id: "snap-6",
-    projectId: "proj-1",
-    createdAt: "2026-03-28T14:30:00Z",
-    label: null,
-    changeCount: 8,
-    userId: "user-2",
-  },
-]
+function generateMockSnapshots(): Snapshot[] {
+  const now = new Date()
+  const snapshots: Snapshot[] = []
+  const users = ["user-1", "user-2", "user-3"]
+  const files = ["/src/App.tsx", "/src/index.tsx", "/src/components/Header.tsx", "/src/utils/helpers.ts"]
+  const baseFileStates = Object.fromEntries(mockFiles.map((f) => [f.path, f.content]))
+  
+  // AI prompt summaries for variety
+  const aiPrompts = [
+    "Refactored Auth Flow",
+    "Added input validation",
+    "Optimized render performance",
+    "Fixed TypeScript errors",
+    "Improved error handling",
+    "Added accessibility attributes",
+    "Extracted reusable hook",
+    "Updated API endpoints",
+  ]
+
+  // Human save labels
+  const humanLabels = [
+    "Manual save before refactor",
+    "Checkpoint: working state",
+    "Pre-merge backup",
+    "Feature complete",
+    "Bug fix checkpoint",
+  ]
+
+  let snapId = 1
+  
+  // Generate snapshots going back 12 hours
+  for (let hoursAgo = 12; hoursAgo >= 0; hoursAgo--) {
+    const hourBase = new Date(now.getTime() - hoursAgo * 60 * 60 * 1000)
+    
+    // Generate ~60 cron snapshots per hour (every 60 seconds)
+    for (let min = 0; min < 60; min++) {
+      const snapTime = new Date(hourBase.getTime() + min * 60 * 1000)
+      
+      // Skip future times
+      if (snapTime > now) continue
+      
+      const userId = users[Math.floor(Math.random() * users.length)]
+      const filePath = files[Math.floor(Math.random() * files.length)]
+      
+      // Randomly insert AI checkpoint (~5% chance)
+      if (Math.random() < 0.05) {
+        snapshots.push({
+          id: `snap-${snapId++}`,
+          projectId: "proj-1",
+          createdAt: snapTime.toISOString(),
+          label: null,
+          changeCount: Math.floor(Math.random() * 50) + 10,
+          userId,
+          kind: "ai",
+          promptSummary: aiPrompts[Math.floor(Math.random() * aiPrompts.length)],
+          filePath,
+          fileStates: baseFileStates,
+        })
+      }
+      // Randomly insert human checkpoint (~2% chance)
+      else if (Math.random() < 0.02) {
+        snapshots.push({
+          id: `snap-${snapId++}`,
+          projectId: "proj-1",
+          createdAt: snapTime.toISOString(),
+          label: humanLabels[Math.floor(Math.random() * humanLabels.length)],
+          changeCount: Math.floor(Math.random() * 30) + 5,
+          userId,
+          kind: "human",
+          filePath,
+          fileStates: baseFileStates,
+        })
+      }
+      // Standard cron snapshot
+      else {
+        snapshots.push({
+          id: `snap-${snapId++}`,
+          projectId: "proj-1",
+          createdAt: snapTime.toISOString(),
+          label: null,
+          changeCount: Math.floor(Math.random() * 15) + 1,
+          userId,
+          kind: "cron",
+          filePath,
+          fileStates: baseFileStates,
+        })
+      }
+    }
+  }
+  
+  return snapshots
+}
+
+export const mockSnapshots: Snapshot[] = generateMockSnapshots()
 
 // ─── Async fetch wrappers (to be replaced with Prisma queries in RSC) ────────
 
