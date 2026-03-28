@@ -251,8 +251,34 @@ export async function getSnapshots(projectId: string): Promise<Snapshot[]> {
 
 // ─── Files (initial load from latest snapshot or empty) ──────────────────
 // In production, files live in Yjs server memory.
-// On first load, we return an empty set — the Yjs server will hydrate from snapshot.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export async function getProjectFiles(projectId: string): Promise<FileNode[]> {
-  return []
+  const latestSnapshot = await prisma.snapshot.findFirst({
+    where: { projectId },
+    orderBy: { createdAt: "desc" },
+    select: { fileStates: true },
+  })
+
+  const fileStates = latestSnapshot?.fileStates as Record<string, string> | null | undefined
+  if (!fileStates) return []
+
+  const entries = Object.entries(fileStates)
+  return entries.map(([path, content]) => {
+    const ext = path.split(".").pop()?.toLowerCase() ?? ""
+    const language =
+      ext === "ts" || ext === "tsx"
+        ? "typescript"
+        : ext === "js" || ext === "jsx"
+          ? "javascript"
+          : ext === "json"
+            ? "json"
+            : ext === "md"
+              ? "markdown"
+              : "plaintext"
+
+    return {
+      path,
+      content,
+      language,
+    }
+  })
 }
