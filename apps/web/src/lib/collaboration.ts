@@ -9,6 +9,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react"
 import { io, Socket } from "socket.io-client"
+import { toast } from "sonner"
 import type { User, FileNode, PresenceUser, TerminalLine, AIChatMessage, AIChatSession, AIAgent } from "@/data/types"
 
 const COLLAB_SERVER_URL =
@@ -342,6 +343,8 @@ export function useCollaboration({
       })
       socketRef.current = socket
 
+      let wasConnected = false
+
       socket.on("connect", () => {
         if (destroyed) return
         setConnected(true)
@@ -354,10 +357,39 @@ export function useCollaboration({
           avatarUrl: currentUser.avatarUrl,
           clientId: doc.clientID,
         })
+        // Show reconnection toast only if we previously lost connection
+        if (wasConnected) {
+          toast.success("Reconnected — you're back in sync", { duration: 3000 })
+        }
+        wasConnected = true
       })
 
-      socket.on("disconnect", () => {
-        if (!destroyed) setConnected(false)
+      socket.on("disconnect", (reason) => {
+        if (destroyed) return
+        setConnected(false)
+        // Only show toast for unexpected disconnections, not clean unmounts
+        if (reason !== "io client disconnect") {
+          toast.warning("Lost connection to the workspace", {
+            description: "We're automatically trying to reconnect.",
+            duration: 5000,
+            action: {
+              label: "Retry Now",
+              onClick: () => socket.connect(),
+            },
+          })
+        }
+      })
+
+      socket.on("connect_error", () => {
+        if (destroyed) return
+        // Only fire once — Socket.IO retries automatically
+        if (!wasConnected) {
+          toast.error("Unable to connect to the collaboration server", {
+            description: "You can still edit locally. Changes will sync when the connection is restored.",
+            duration: 6000,
+          })
+          wasConnected = true // prevent repeat toasts
+        }
       })
 
       // ── Yjs sync ──
@@ -673,18 +705,75 @@ export function useCollaboration({
       agentName: string
       agentInstructions?: string
     }) => {
+      const messageId = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+
+      // Ensure the chat skeleton exists in Yjs so the UI shows the chat tab immediately.
+      // The server will add the actual user message, AI response, and control isGenerating.
+      const Y = yjsRef.current
+      const doc = ydocRef.current
+      if (Y && doc) {
+        const aiChatsMap = doc.getMap("aiChats")
+        let chatMap = aiChatsMap.get(opts.chatId)
+        if (!chatMap || !(chatMap instanceof Y.Map)) {
+          doc.transact(() => {
+            const newChat = new Y.Map()
+            newChat.set("agentId", opts.agentId)
+            newChat.set("agentName", opts.agentName)
+            newChat.set("isGenerating", false)
+            newChat.set("messages", new Y.Array())
+            newChat.set("input", new Y.Text())
+            aiChatsMap.set(opts.chatId, newChat)
+            chatMap = newChat
+          })
+        }
+      }
+
+      // Emit to server for AI processing — server adds user message + AI response to Yjs
       const socket = socketRef.current
-      if (!socket) return
-      socket.emit("ai-chat", {
-        chatId: opts.chatId,
-        messageId: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        content: opts.content,
-        userId: currentUser.id,
-        userName: currentUser.name,
-        agentId: opts.agentId,
-        agentName: opts.agentName,
-        agentInstructions: opts.agentInstructions,
-      })
+      if (socket?.connected) {
+        socket.emit("ai-chat", {
+          chatId: opts.chatId,
+          messageId,
+          content: opts.content,
+          userId: currentUser.id,
+          userName: currentUser.name,
+          agentId: opts.agentId,
+          agentName: opts.agentName,
+          agentInstructions: opts.agentInstructions,
+        })
+      } else {
+        // Offline — write a local error message so the user knows
+        if (Y && doc) {
+          const aiChatsMap = doc.getMap("aiChats")
+          const chatMap = aiChatsMap.get(opts.chatId) as InstanceType<typeof Y.Map> | undefined
+          if (chatMap) {
+            doc.transact(() => {
+              // Add the user message locally so it's visible
+              const messagesArr = chatMap.get("messages")
+              if (messagesArr instanceof Y.Array) {
+                messagesArr.push([
+                  {
+                    id: messageId,
+                    role: "user",
+                    content: opts.content,
+                    userId: currentUser.id,
+                    userName: currentUser.name,
+                    timestamp: Date.now(),
+                  },
+                  {
+                    id: `err-${Date.now()}`,
+                    role: "assistant",
+                    content: "Unable to reach the AI — the server connection is down. Your message will not be processed until the connection is restored. Please try again once the connection indicator turns green.",
+                    operations: [],
+                    operationStatuses: [],
+                    timestamp: Date.now(),
+                  },
+                ])
+              }
+            })
+          }
+        }
+      }
     },
     [currentUser.id, currentUser.name]
   )

@@ -9,6 +9,47 @@ import { Separator } from "@/components/ui/separator"
 import { createClient } from "@/lib/supabase/client"
 import { toast } from "sonner"
 
+function getAuthErrorMessage(errorMsg: string, method: "GitHub" | "email"): { title: string; description: string } {
+  const msg = errorMsg.toLowerCase()
+
+  if (msg.includes("rate limit") || msg.includes("too many") || msg.includes("exceeded")) {
+    return {
+      title: "Too many sign-in attempts",
+      description: "You've reached the limit for magic link requests. Please wait a few minutes before trying again.",
+    }
+  }
+  if (msg.includes("invalid email") || msg.includes("invalid_email")) {
+    return {
+      title: "Invalid email address",
+      description: "Please check the email you entered and try again.",
+    }
+  }
+  if (msg.includes("email not confirmed") || msg.includes("not confirmed")) {
+    return {
+      title: "Email not confirmed",
+      description: "Please check your inbox for a confirmation email, then try signing in again.",
+    }
+  }
+  if (msg.includes("network") || msg.includes("fetch") || msg.includes("connection")) {
+    return {
+      title: "Connection issue",
+      description: "Unable to reach the authentication server. Check your internet connection and try again.",
+    }
+  }
+  if (msg.includes("provider") || msg.includes("oauth")) {
+    return {
+      title: `${method} sign-in unavailable`,
+      description: `There was a problem connecting to ${method}. Please try again or use a different sign-in method.`,
+    }
+  }
+
+  // Fallback — still actionable
+  return {
+    title: `Unable to sign in with ${method}`,
+    description: "Something unexpected went wrong. Please try again in a moment.",
+  }
+}
+
 export default function LoginPage() {
   const [email, setEmail] = useState("")
   const [loading, setLoading] = useState(false)
@@ -23,7 +64,8 @@ export default function LoginPage() {
       },
     })
     if (error) {
-      toast.error("Failed to sign in with GitHub. Please try again.")
+      const msg = getAuthErrorMessage(error.message, "GitHub")
+      toast.error(msg.title, { description: msg.description })
       setLoading(false)
     }
   }
@@ -39,9 +81,12 @@ export default function LoginPage() {
       },
     })
     if (error) {
-      toast.error("Failed to send magic link. Please try again.")
+      const msg = getAuthErrorMessage(error.message, "email")
+      toast.error(msg.title, { description: msg.description })
     } else {
-      toast.success("Check your email for the magic link!")
+      toast.success("Check your email for the magic link!", {
+        description: `We sent a sign-in link to ${email}`,
+      })
     }
     setLoading(false)
   }

@@ -60,7 +60,7 @@ const TERMINAL_MAX = 500
 const TERMINAL_DEFAULT = 220
 const AGENT_PANEL_MIN = 220
 const AGENT_PANEL_MAX = 400
-const AGENT_PANEL_DEFAULT = 280
+const AGENT_PANEL_DEFAULT = AGENT_PANEL_MAX
 
 export function WorkspaceShell({
   project,
@@ -553,16 +553,22 @@ export function WorkspaceShell({
           {/* Connection indicator */}
           <Tooltip>
             <TooltipTrigger asChild>
-              <div
-                className={`h-2 w-2 rounded-full transition-colors ${
-                  collab.connected
-                    ? "bg-success"
-                    : "bg-warning animate-pulse"
-                }`}
-              />
+              <div className="flex items-center gap-1.5">
+                <div
+                  className={cn(
+                    "h-2 w-2 rounded-full transition-colors",
+                    collab.connected ? "bg-success" : "bg-warning animate-pulse"
+                  )}
+                />
+                {!collab.connected && (
+                  <span className="text-[10px] text-warning font-medium">Offline</span>
+                )}
+              </div>
             </TooltipTrigger>
             <TooltipContent>
-              {collab.connected ? "Connected — real-time sync active" : "Reconnecting..."}
+              {collab.connected
+                ? "Connected — real-time sync active"
+                : "Lost connection — reconnecting automatically. You can still edit locally."}
             </TooltipContent>
           </Tooltip>
 
@@ -640,24 +646,32 @@ export function WorkspaceShell({
 
         {/* Center: Run button */}
         <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            variant={isRunning ? "destructive" : "default"}
-            onClick={isRunning ? () => setIsRunning(false) : handleRun}
-            className="h-7 gap-1.5 px-3 text-xs"
-          >
-            {isRunning ? (
-              <>
-                <Square className="h-3 w-3" />
-                Stop
-              </>
-            ) : (
-              <>
-                <Play className="h-3 w-3" />
-                Run
-              </>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                size="sm"
+                variant={isRunning ? "destructive" : "default"}
+                onClick={isRunning ? () => setIsRunning(false) : handleRun}
+                className="h-7 gap-1.5 px-3 text-xs"
+                disabled={!collab.connected && !isRunning}
+              >
+                {isRunning ? (
+                  <>
+                    <Square className="h-3 w-3" />
+                    Stop
+                  </>
+                ) : (
+                  <>
+                    <Play className="h-3 w-3" />
+                    Run
+                  </>
+                )}
+              </Button>
+            </TooltipTrigger>
+            {!collab.connected && !isRunning && (
+              <TooltipContent>Server connection required to run code</TooltipContent>
             )}
-          </Button>
+          </Tooltip>
         </div>
 
         {/* Right: Actions + Presence */}
@@ -670,7 +684,7 @@ export function WorkspaceShell({
                 className="h-7 w-7"
                 onClick={handleToggleTimeTravel}
               >
-                <History className="h-4 w-4" />
+                <History className={cn("h-4 w-4", !collab.connected && "text-text-tertiary")} />
               </Button>
             </TooltipTrigger>
             <TooltipContent>

@@ -405,6 +405,17 @@ function AIQuickActionsGutter({
 
 // ─── Code Editor ─────────────────────────────────────────────────────────
 
+// ─── Remote Cursor Overlay ──────────────────────────────────────────────
+
+interface RemoteCursor {
+  clientId: number
+  name: string
+  color: string
+  top: number
+  left: number
+  height: number
+}
+
 export function CodeEditor({
   file,
   readOnly = false,
@@ -423,10 +434,12 @@ export function CodeEditor({
   /* eslint-disable @typescript-eslint/no-explicit-any */
   const bindingRef = useRef<any>(null)
   const editorRef = useRef<any>(null)
+  const yjsModuleRef = useRef<any>(null)
   /* eslint-enable @typescript-eslint/no-explicit-any */
+  const [remoteCursors, setRemoteCursors] = useState<RemoteCursor[]>([])
+  const [editorReady, setEditorReady] = useState(false)
 
   useEffect(() => {
-    // Dynamic import to avoid SSR issues
     import("@monaco-editor/react").then((mod) => {
       setMonacoEditor(() => mod.default)
     })
@@ -440,6 +453,120 @@ export function CodeEditor({
     }
   }, [])
 
+  // ── React-based cursor overlay ──
+  // Reads awareness selections, converts to pixel positions via Monaco API,
+  // and renders as positioned divs. Fully independent of Monaco's decoration
+  // rendering pipeline — always visible regardless of editor focus state.
+  useEffect(() => {
+    if (!awareness || !yText || !editorReady) return
+    const aw = awareness as any
+    const yt = yText as any
+
+    let Y: any = yjsModuleRef.current
+    let disposed = false
+    const disposables: Array<{ dispose(): void }> = []
+    let rafId: number | undefined
+
+    const computeCursors = () => {
+      const editor = editorRef.current
+      if (!editor || !Y || disposed) return
+      const model = editor.getModel()
+      const doc = yt.doc
+      if (!model || !doc) return
+
+      const localClientId = doc.clientID
+      const states = aw.getStates() as Map<number, Record<string, unknown>>
+      const cursors: RemoteCursor[] = []
+
+      states.forEach((state: Record<string, unknown>, clientId: number) => {
+        if (clientId === localClientId) return
+
+        const name = (state.name as string) || "User"
+        const color = (state.color as string) || "hsl(172, 66%, 50%)"
+
+        // Try y-monaco selection first (user has clicked in the editor)
+        const sel = state.selection as { anchor?: unknown; head?: unknown } | undefined
+        if (sel?.head) {
+          const headAbs = Y.createAbsolutePositionFromRelativePosition(sel.head, doc)
+          if (headAbs && headAbs.type === yt) {
+            const pos = model.getPositionAt(headAbs.index)
+            const pixelPos = editor.getScrolledVisiblePosition(pos)
+            if (pixelPos) {
+              cursors.push({ clientId, name, color, top: pixelPos.top, left: pixelPos.left, height: pixelPos.height })
+            }
+          }
+          // User has a selection — don't fall through to line-1 fallback.
+          // If we can't resolve yet (doc still syncing), skip for now;
+          // onDidChangeModelContent will re-trigger once content arrives.
+          return
+        }
+
+        // No selection at all — user is viewing this file but hasn't clicked
+        const userState = state.user as { activeFile?: string } | undefined
+        if (userState?.activeFile === file.path) {
+          const pixelPos = editor.getScrolledVisiblePosition({ lineNumber: 1, column: 1 })
+          if (pixelPos) {
+            cursors.push({ clientId, name, color, top: pixelPos.top, left: pixelPos.left, height: pixelPos.height })
+          }
+        }
+      })
+
+      setRemoteCursors(cursors)
+    }
+
+    // Load Yjs module then wire up listeners
+    const init = async () => {
+      if (!Y) {
+        Y = await import("yjs")
+        yjsModuleRef.current = Y
+      }
+      if (disposed) return
+
+      aw.on("change", computeCursors)
+
+      // Clear stale selection from a previously viewed file
+      aw.setLocalStateField("selection", null)
+
+      // Recompute on scroll, layout, or content change (pixel positions shift,
+      // and content changes mean the doc synced so relative positions can resolve)
+      const editor = editorRef.current
+      if (editor) {
+        disposables.push(editor.onDidScrollChange(computeCursors))
+        disposables.push(editor.onDidLayoutChange(computeCursors))
+        disposables.push(editor.onDidChangeModelContent(computeCursors))
+
+        // Broadcast local cursor position via awareness (replaces y-monaco's
+        // built-in broadcasting which we disabled to prevent duplicate cursors)
+        disposables.push(editor.onDidChangeCursorSelection(() => {
+          if (disposed) return
+          const model = editor.getModel()
+          if (!model) return
+          const sel = editor.getSelection()
+          if (sel) {
+            const anchor = Y.createRelativePositionFromTypeIndex(yt, model.getOffsetAt(sel.getStartPosition()))
+            const head = Y.createRelativePositionFromTypeIndex(yt, model.getOffsetAt(sel.getEndPosition()))
+            aw.setLocalStateField("selection", { anchor, head })
+          }
+        }))
+      }
+
+      computeCursors()
+
+      // Second pass after Monaco layout settles
+      rafId = requestAnimationFrame(() => {
+        if (!disposed) computeCursors()
+      })
+    }
+    init()
+
+    return () => {
+      disposed = true
+      aw.off("change", computeCursors)
+      disposables.forEach((d) => d.dispose())
+      if (rafId !== undefined) cancelAnimationFrame(rafId)
+    }
+  }, [awareness, yText, editorReady])
+
   // Find the first pending AI block for this file
   const pendingBlock = aiBlocks?.find((b) => b.status === "pending")
 
@@ -447,24 +574,26 @@ export function CodeEditor({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (editor: any) => {
       editorRef.current = editor
+      setEditorReady(true)
 
-      // If we have a Y.Text, create a y-monaco binding for real-time CRDT sync
-      if (yText && awareness) {
+      // If we have a Y.Text, create a y-monaco binding for CRDT text sync only.
+      // We do NOT pass awareness here — y-monaco would render its own cursor
+      // decorations which duplicate our custom React overlay. Cursor broadcasting
+      // is handled manually in the cursor useEffect below.
+      if (yText) {
         import("y-monaco").then(({ MonacoBinding }) => {
           if (!editor.getModel()) return
           bindingRef.current = new MonacoBinding(
-            yText as any, // Y.Text
+            yText as any,
             editor.getModel()!,
-            new Set([editor]),
-            awareness as any // Awareness
+            new Set([editor])
           )
         }).catch(() => {
-          // Fallback: if y-monaco fails, use the value prop approach
           console.warn("[iTECify] y-monaco binding failed, using fallback")
         })
       }
     },
-    [yText, awareness]
+    [yText]
   )
 
   if (!MonacoEditor) {
@@ -583,6 +712,35 @@ export function CodeEditor({
           }
         />
       )}
+
+      {/* Remote cursor overlays — always visible regardless of editor focus */}
+      {remoteCursors.map((cursor) => (
+        <div
+          key={cursor.clientId}
+          className="pointer-events-none absolute z-20"
+          style={{
+            top: cursor.top,
+            left: cursor.left,
+            transition: "top 120ms ease-out, left 120ms ease-out",
+          }}
+        >
+          {/* Cursor line */}
+          <div
+            style={{
+              width: 2,
+              height: cursor.height,
+              backgroundColor: cursor.color,
+            }}
+          />
+          {/* Name label */}
+          <div
+            className="absolute -top-4 left-0 whitespace-nowrap rounded px-1 py-0.5 text-[10px] font-medium leading-none text-white"
+            style={{ backgroundColor: cursor.color }}
+          >
+            {cursor.name}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useActionState } from "react"
 import Link from "next/link"
 import { motion } from "framer-motion"
 import {
@@ -16,7 +16,7 @@ import {
   FolderOpen,
 } from "lucide-react"
 import type { User, Project } from "@/data/types"
-import { signOut, createProject } from "@/app/actions"
+import { signOut, createProject, deleteProject } from "@/app/actions"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -83,6 +83,21 @@ export function DashboardShell({ user, projects }: DashboardShellProps) {
   const [showNewProject, setShowNewProject] = useState(false)
   const [newProjectName, setNewProjectName] = useState("")
   const [newProjectDesc, setNewProjectDesc] = useState("")
+  const [deletingProject, setDeletingProject] = useState<Project | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
+
+  const [_createState, createAction, isCreating] = useActionState(
+    async (_prev: { error?: string } | null, formData: FormData) => {
+      const result = await createProject(null, formData)
+      if (!result?.error) {
+        setShowNewProject(false)
+        setNewProjectName("")
+        setNewProjectDesc("")
+      }
+      return result ?? null
+    },
+    null
+  )
 
   const filtered = projects.filter(
     (p) =>
@@ -197,7 +212,7 @@ export function DashboardShell({ user, projects }: DashboardShellProps) {
               animate="show"
             >
               {filtered.map((project) => (
-                <ProjectCard key={project.id} project={project} />
+                <ProjectCard key={project.id} project={project} onDelete={setDeletingProject} />
               ))}
             </motion.div>
           )}
@@ -215,12 +230,7 @@ export function DashboardShell({ user, projects }: DashboardShellProps) {
             </DialogDescription>
           </DialogHeader>
           <form
-            action={async (formData: FormData) => {
-              await createProject(formData)
-              setShowNewProject(false)
-              setNewProjectName("")
-              setNewProjectDesc("")
-            }}
+            action={createAction}
             className="space-y-4 py-4"
           >
             <div className="space-y-2">
@@ -235,6 +245,7 @@ export function DashboardShell({ user, projects }: DashboardShellProps) {
                 onChange={(e) => setNewProjectName(e.target.value)}
                 autoFocus
                 required
+                disabled={isCreating}
               />
             </div>
             <div className="space-y-2">
@@ -247,24 +258,55 @@ export function DashboardShell({ user, projects }: DashboardShellProps) {
                 placeholder="What's this workspace about?"
                 value={newProjectDesc}
                 onChange={(e) => setNewProjectDesc(e.target.value)}
+                disabled={isCreating}
               />
             </div>
             <DialogFooter>
-              <Button variant="ghost" type="button" onClick={() => setShowNewProject(false)}>
+              <Button variant="ghost" type="button" onClick={() => setShowNewProject(false)} disabled={isCreating}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={!newProjectName.trim()}>
-                Create workspace
+              <Button type="submit" disabled={!newProjectName.trim() || isCreating}>
+                {isCreating ? "Creating..." : "Create workspace"}
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── Delete Confirmation Dialog ─── */}
+      <Dialog open={!!deletingProject} onOpenChange={(open) => { if (!open) setDeletingProject(null) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete workspace</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete &ldquo;{deletingProject?.name}&rdquo;? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setDeletingProject(null)} disabled={isDeleting}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={isDeleting}
+              onClick={async () => {
+                if (!deletingProject) return
+                setIsDeleting(true)
+                await deleteProject(deletingProject.id)
+                setIsDeleting(false)
+                setDeletingProject(null)
+              }}
+            >
+              {isDeleting ? "Deleting..." : "Delete"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
   )
 }
 
-function ProjectCard({ project }: { project: Project }) {
+function ProjectCard({ project, onDelete }: { project: Project; onDelete: (project: Project) => void }) {
   return (
     <motion.div variants={itemVariants}>
       <Link
@@ -284,11 +326,11 @@ function ProjectCard({ project }: { project: Project }) {
                 <MoreHorizontal className="h-4 w-4 text-text-tertiary" />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem>Settings</DropdownMenuItem>
-              <DropdownMenuItem>Invite</DropdownMenuItem>
+            <DropdownMenuContent align="end" onClick={(e) => { e.preventDefault(); e.stopPropagation() }}>
+              <DropdownMenuItem onClick={(e) => { e.preventDefault(); e.stopPropagation() }}>Settings</DropdownMenuItem>
+              <DropdownMenuItem onClick={(e) => { e.preventDefault(); e.stopPropagation() }}>Invite</DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem className="text-error">Delete</DropdownMenuItem>
+              <DropdownMenuItem className="text-error" onClick={(e) => { e.preventDefault(); e.stopPropagation(); onDelete(project) }}>Delete</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
