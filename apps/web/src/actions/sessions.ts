@@ -12,11 +12,11 @@ function toSession(row: {
   createdAt: Date
 }): Session {
   return {
-    id:         row.id,
-    name:       row.name,
-    language:   row.language,
-    owner_id:   row.ownerId,
-    created_at: row.createdAt.toISOString(),
+    id:        row.id,
+    name:      row.name,
+    language:  row.language,
+    ownerId:   row.ownerId,
+    createdAt: row.createdAt.toISOString(),
   }
 }
 

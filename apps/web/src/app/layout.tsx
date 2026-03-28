@@ -1,28 +1,20 @@
 import type { Metadata } from "next"
-import { Syne, JetBrains_Mono, DM_Sans } from "next/font/google"
+import { Inter, JetBrains_Mono } from "next/font/google"
 import "./globals.css"
 
-const syne = Syne({
-  variable: "--font-syne",
+const inter = Inter({
+  variable: "--font-inter",
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700", "800"],
 })
 
 const jetbrainsMono = JetBrains_Mono({
   variable: "--font-jetbrains-mono",
   subsets: ["latin"],
-  weight: ["300", "400", "500", "600"],
-})
-
-const dmSans = DM_Sans({
-  variable: "--font-dm-sans",
-  subsets: ["latin"],
-  weight: ["300", "400", "500", "600"],
 })
 
 export const metadata: Metadata = {
   title: "iTECify",
-  description: "Real-time collaborative code editor",
+  description: "Figma for Code — collaborative, multi-agent coding sandbox",
 }
 
 export default function RootLayout({
@@ -31,7 +23,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${syne.variable} ${jetbrainsMono.variable} ${dmSans.variable} dark h-full antialiased`}
+      className={`${inter.variable} ${jetbrainsMono.variable} dark h-full`}
     >
       <body className="h-full overflow-hidden">{children}</body>
     </html>

@@ -1,10 +1,8 @@
 import { Topbar } from "@/components/layout/Topbar"
 import { Sidebar } from "@/components/layout/Sidebar"
-import { createClient } from "@/lib/supabase/server"
+// import { createClient } from "@/lib/supabase/server"
 
-function getInitials(user: { email?: string; user_metadata?: { full_name?: string } } | null): string {
-  if (!user) return "?"
-  const name = user.user_metadata?.full_name
+function getInitials(name?: string | null, email?: string | null): string {
   if (name) {
     return name
       .split(" ")
@@ -13,7 +11,7 @@ function getInitials(user: { email?: string; user_metadata?: { full_name?: strin
       .slice(0, 2)
       .toUpperCase()
   }
-  return (user.email?.[0] ?? "?").toUpperCase()
+  return (email?.[0] ?? "?").toUpperCase()
 }
 
 export default async function DashboardLayout({
@@ -21,9 +19,11 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode
 }) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  const initials = getInitials(user)
+  // TODO: Replace with real auth when integrating
+  // const supabase = await createClient()
+  // const { data: { user } } = await supabase.auth.getUser()
+  // const initials = getInitials(user?.user_metadata?.full_name, user?.email)
+  const initials = getInitials("Alex Chen", "alex@example.com")
 
   return (
     <div className="flex flex-col h-screen">

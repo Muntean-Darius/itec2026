@@ -2,7 +2,20 @@
 
 import Editor, { type BeforeMount, type OnMount, type Monaco } from "@monaco-editor/react"
 
-// Maps display language names → Monaco language IDs
+export type MonacoEditor = Parameters<OnMount>[0]
+
+export interface CodeEditorProps {
+  language?: string
+  value?: string
+  defaultValue?: string
+  onChange?: (value: string | undefined) => void
+  onMount?: (editor: MonacoEditor, monaco: Monaco) => void
+  readOnly?: boolean
+}
+
+/**
+ * Language display name → Monaco language ID.
+ */
 export const LANG_MAP: Record<string, string> = {
   Python:     "python",
   JavaScript: "javascript",
@@ -13,110 +26,121 @@ export const LANG_MAP: Record<string, string> = {
   Java:       "java",
 }
 
-const DEFAULT_SNIPPETS: Record<string, string> = {
-  python:
-    "# Start coding\n\ndef main():\n    print(\"Hello, iTECify!\")\n\nmain()\n",
-  javascript:
-    "// Start coding\n\nconsole.log(\"Hello, iTECify!\");\n",
-  typescript:
-    "// Start coding\n\nconst greet = (name: string): string => `Hello, ${name}!`;\nconsole.log(greet(\"iTECify\"));\n",
-  go:
-    "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"Hello, iTECify!\")\n}\n",
-  rust:
-    "fn main() {\n    println!(\"Hello, iTECify!\");\n}\n",
-  cpp:
-    "#include <iostream>\n\nint main() {\n    std::cout << \"Hello, iTECify!\" << std::endl;\n    return 0;\n}\n",
-  java:
-    "public class Main {\n    public static void main(String[] args) {\n        System.out.println(\"Hello, iTECify!\");\n    }\n}\n",
-}
-
-const beforeMount: BeforeMount = (monaco) => {
-  monaco.editor.defineTheme("itecify-dark", {
+/**
+ * Custom Monaco theme matching the iTECify design system.
+ * All colors use the HSL palette from globals.css.
+ */
+const defineTheme: BeforeMount = (monaco) => {
+  monaco.editor.defineTheme("itecify", {
     base: "vs-dark",
     inherit: true,
     rules: [
-      { token: "comment",               foreground: "484F58", fontStyle: "italic" },
-      { token: "comment.line",          foreground: "484F58", fontStyle: "italic" },
-      { token: "comment.block",         foreground: "484F58", fontStyle: "italic" },
-      { token: "keyword",               foreground: "A78BFA" },
-      { token: "keyword.control",       foreground: "A78BFA" },
-      { token: "keyword.operator",      foreground: "00D9C0" },
-      { token: "string",                foreground: "4ADE80" },
-      { token: "string.escape",         foreground: "FB923C" },
-      { token: "number",                foreground: "FB923C" },
-      { token: "number.float",          foreground: "FB923C" },
-      { token: "type",                  foreground: "60A5FA" },
-      { token: "type.identifier",       foreground: "60A5FA" },
-      { token: "entity.name.function",  foreground: "00D9C0" },
-      { token: "support.function",      foreground: "00D9C0" },
-      { token: "variable",              foreground: "E6EDF3" },
-      { token: "variable.parameter",    foreground: "E6EDF3" },
-      { token: "operator",              foreground: "00D9C0" },
-      { token: "delimiter",             foreground: "8B949E" },
-      { token: "delimiter.bracket",     foreground: "8B949E" },
-      { token: "tag",                   foreground: "60A5FA" },
-      { token: "attribute.name",        foreground: "A78BFA" },
-      { token: "attribute.value",       foreground: "4ADE80" },
+      // Comments — muted, italic
+      { token: "comment",          foreground: "505870", fontStyle: "italic" },
+      { token: "comment.line",     foreground: "505870", fontStyle: "italic" },
+      { token: "comment.block",    foreground: "505870", fontStyle: "italic" },
+
+      // Keywords — soft purple (brand-adjacent)
+      { token: "keyword",          foreground: "A78BFA" },
+      { token: "keyword.control",  foreground: "A78BFA" },
+      { token: "keyword.operator", foreground: "34D399" },
+
+      // Strings — green
+      { token: "string",           foreground: "6EE7B7" },
+      { token: "string.escape",    foreground: "FDBA74" },
+
+      // Numbers — peach
+      { token: "number",           foreground: "FDBA74" },
+      { token: "number.float",     foreground: "FDBA74" },
+
+      // Types — light blue
+      { token: "type",             foreground: "7DD3FC" },
+      { token: "type.identifier",  foreground: "7DD3FC" },
+
+      // Functions — teal (AI accent)
+      { token: "entity.name.function", foreground: "2DD4BF" },
+      { token: "support.function",     foreground: "2DD4BF" },
+
+      // Variables — foreground
+      { token: "variable",           foreground: "D9DDE8" },
+      { token: "variable.parameter", foreground: "D9DDE8" },
+
+      // Operators & delimiters
+      { token: "operator",            foreground: "34D399" },
+      { token: "delimiter",           foreground: "6B7280" },
+      { token: "delimiter.bracket",   foreground: "6B7280" },
+
+      // HTML/JSX
+      { token: "tag",              foreground: "7DD3FC" },
+      { token: "attribute.name",   foreground: "A78BFA" },
+      { token: "attribute.value",  foreground: "6EE7B7" },
     ],
     colors: {
-      "editor.background":                    "#0C1929",
-      "editor.foreground":                    "#E4EEFF",
-      "editorGutter.background":              "#0C1929",
-      "editor.lineHighlightBackground":       "#0F2035",
+      // Editor backgrounds
+      "editor.background":                    "#10131a",
+      "editor.foreground":                    "#d9dde8",
+      "editorGutter.background":              "#10131a",
+
+      // Line highlight — subtle surface lift
+      "editor.lineHighlightBackground":       "#181c26",
       "editor.lineHighlightBorder":           "#00000000",
-      "editor.selectionBackground":           "#162840CC",
-      "editor.inactiveSelectionBackground":   "#16284066",
-      "editor.wordHighlightBackground":       "#16284066",
-      "editor.wordHighlightStrongBackground": "#1628409A",
-      "editorCursor.foreground":              "#4F86F7",
-      "editorCursor.background":              "#0C1929",
-      "editorLineNumber.foreground":          "#3E5578",
-      "editorLineNumber.activeForeground":    "#7A9BC4",
-      "editorIndentGuide.background1":        "#162840",
-      "editorIndentGuide.activeBackground1":  "#1A3050",
-      "editorBracketMatch.background":        "#4F86F720",
-      "editorBracketMatch.border":            "#4F86F750",
-      "scrollbarSlider.background":           "#16284050",
-      "scrollbarSlider.hoverBackground":      "#1A305080",
-      "scrollbarSlider.activeBackground":     "#1A3050B0",
-      "editorWidget.background":              "#0F2035",
-      "editorWidget.border":                  "#1A3050",
-      "editorHoverWidget.background":         "#0F2035",
-      "editorHoverWidget.border":             "#1A3050",
-      "editorSuggestWidget.background":       "#0F2035",
-      "editorSuggestWidget.border":           "#1A3050",
-      "editorSuggestWidget.selectedBackground":"#162840",
-      "editorSuggestWidget.highlightForeground":"#4F86F7",
-      "editorSuggestWidget.focusHighlightForeground":"#4F86F7",
-      "editor.findMatchBackground":           "#4F86F730",
-      "editor.findMatchHighlightBackground":  "#4F86F718",
-      "editor.findMatchBorder":               "#4F86F760",
-      "editorError.foreground":               "#C23B3B",
-      "editorWarning.foreground":             "#C9AA2A",
-      "editorInfo.foreground":                "#4F86F7",
-      "peekView.border":                      "#4F86F740",
-      "peekViewEditor.background":            "#0F2035",
-      "peekViewEditor.matchHighlightBackground":"#4F86F720",
-      "peekViewResult.background":            "#0C1929",
-      "peekViewResult.matchHighlightBackground":"#4F86F720",
-      "peekViewResult.selectionBackground":   "#162840",
-      "peekViewTitle.background":             "#0F2035",
+
+      // Selection — brand tint
+      "editor.selectionBackground":           "#6366f125",
+      "editor.inactiveSelectionBackground":   "#6366f112",
+      "editor.wordHighlightBackground":       "#6366f112",
+      "editor.wordHighlightStrongBackground": "#6366f120",
+
+      // Cursor — brand color
+      "editorCursor.foreground":              "#6366f1",
+      "editorCursor.background":              "#10131a",
+
+      // Line numbers
+      "editorLineNumber.foreground":          "#3a3f52",
+      "editorLineNumber.activeForeground":    "#7a8094",
+
+      // Indent guides
+      "editorIndentGuide.background1":        "#1e2130",
+      "editorIndentGuide.activeBackground1":  "#2a2e40",
+
+      // Bracket matching
+      "editorBracketMatch.background":        "#6366f118",
+      "editorBracketMatch.border":            "#6366f140",
+
+      // Scrollbar
+      "scrollbarSlider.background":           "#1e213050",
+      "scrollbarSlider.hoverBackground":      "#2a2e4070",
+      "scrollbarSlider.activeBackground":     "#2a2e4090",
+
+      // Widgets (autocomplete, hover)
+      "editorWidget.background":              "#181c26",
+      "editorWidget.border":                  "#252836",
+      "editorHoverWidget.background":         "#181c26",
+      "editorHoverWidget.border":             "#252836",
+      "editorSuggestWidget.background":       "#181c26",
+      "editorSuggestWidget.border":           "#252836",
+      "editorSuggestWidget.selectedBackground": "#252836",
+      "editorSuggestWidget.highlightForeground": "#6366f1",
+      "editorSuggestWidget.focusHighlightForeground": "#6366f1",
+
+      // Find
+      "editor.findMatchBackground":           "#6366f128",
+      "editor.findMatchHighlightBackground":  "#6366f114",
+      "editor.findMatchBorder":               "#6366f150",
+
+      // Diagnostics
+      "editorError.foreground":               "#c0392b",
+      "editorWarning.foreground":             "#d4a017",
+      "editorInfo.foreground":                "#6366f1",
+
+      // Overview ruler
       "editorOverviewRuler.border":           "#00000000",
-      "minimap.background":                   "#0C1929",
-      "minimapSlider.background":             "#16284050",
+
+      // Minimap
+      "minimap.background":                   "#10131a",
+      "minimapSlider.background":             "#1e213050",
     },
   })
-}
-
-export type MonacoEditor = Monaco["editor"]["IStandaloneCodeEditor"]
-
-export interface CodeEditorProps {
-  language?: string
-  value?: string
-  defaultValue?: string
-  onChange?: (value: string | undefined) => void
-  onMount?: (editor: MonacoEditor, monaco: Monaco) => void
-  readOnly?: boolean
 }
 
 export function CodeEditor({
@@ -138,59 +162,62 @@ export function CodeEditor({
       height="100%"
       language={lang}
       value={value}
-      defaultValue={defaultValue ?? DEFAULT_SNIPPETS[lang] ?? ""}
-      theme="itecify-dark"
-      beforeMount={beforeMount}
+      defaultValue={defaultValue ?? ""}
+      theme="itecify"
+      beforeMount={defineTheme}
       onMount={handleMount}
       onChange={onChange}
       loading={
         <div className="flex h-full w-full items-center justify-center bg-background">
-          <span className="text-xs text-text-dim font-mono animate-pulse">Loading editor…</span>
+          <div className="flex items-center gap-2 text-sm text-text-tertiary">
+            <span className="size-4 border-2 border-text-tertiary/30 border-t-text-tertiary rounded-full animate-spin" />
+            Loading editor…
+          </div>
         </div>
       }
       options={{
-        fontSize:              13,
-        fontFamily:            "'JetBrains Mono', monospace",
-        fontLigatures:         true,
-        lineHeight:            22,
-        letterSpacing:         0.3,
-        minimap:               { enabled: false },
-        scrollBeyondLastLine:  false,
-        padding:               { top: 16, bottom: 16 },
-        lineNumbers:           "on",
-        lineNumbersMinChars:   3,
-        glyphMargin:           true,
-        folding:               true,
-        renderLineHighlight:   "all",
-        renderWhitespace:      "selection",
-        cursorBlinking:        "smooth",
+        fontSize:                13,
+        fontFamily:              "'JetBrains Mono', 'Fira Code', monospace",
+        fontLigatures:           true,
+        lineHeight:              22,
+        letterSpacing:           0.3,
+        minimap:                 { enabled: false },
+        scrollBeyondLastLine:    false,
+        padding:                 { top: 16, bottom: 16 },
+        lineNumbers:             "on",
+        lineNumbersMinChars:     3,
+        glyphMargin:             true,
+        folding:                 true,
+        renderLineHighlight:     "all",
+        renderWhitespace:        "selection",
+        cursorBlinking:          "smooth",
         cursorSmoothCaretAnimation: "on",
-        cursorStyle:           "line",
-        cursorWidth:           2,
-        smoothScrolling:       true,
-        overviewRulerBorder:   false,
+        cursorStyle:             "line",
+        cursorWidth:             2,
+        smoothScrolling:         true,
+        overviewRulerBorder:     false,
         hideCursorInOverviewRuler: true,
-        overviewRulerLanes:    0,
-        wordWrap:              "off",
-        automaticLayout:       true,
-        tabSize:               4,
-        insertSpaces:          true,
+        overviewRulerLanes:      0,
+        wordWrap:                "off",
+        automaticLayout:         true,
+        tabSize:                 4,
+        insertSpaces:            true,
         readOnly,
-        fixedOverflowWidgets:  true,
-        accessibilitySupport:  "off",
+        fixedOverflowWidgets:    true,
+        accessibilitySupport:    "off",
         bracketPairColorization: { enabled: true },
         guides: {
-          bracketPairs:        true,
-          indentation:         true,
+          bracketPairs:          true,
+          indentation:           true,
         },
         suggest: {
-          showKeywords:        true,
-          showSnippets:        true,
+          showKeywords:          true,
+          showSnippets:          true,
         },
         quickSuggestions: {
-          other:               true,
-          comments:            false,
-          strings:             false,
+          other:                 true,
+          comments:              false,
+          strings:               false,
         },
       }}
     />

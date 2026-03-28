@@ -12,48 +12,54 @@ interface SharedTerminalProps {
   onCommand?: (command: string) => void
 }
 
-export function SharedTerminal({ output = [], defaultOpen = true, onCommand }: SharedTerminalProps) {
+export function SharedTerminal({
+  output = [],
+  defaultOpen = true,
+  onCommand,
+}: SharedTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const inputBufferRef = useRef("")
-  const renderedOutputCountRef = useRef(0)
+  const renderedCountRef = useRef(0)
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const [activeTab, setActiveTab] = useState<"terminal" | "output">("terminal")
 
+  // Initialize xterm
   useEffect(() => {
     if (!containerRef.current) return
 
     const term = new Terminal({
       theme: {
-        background:          "#070F1A",
-        foreground:          "#E4EEFF",
-        cursor:              "#4F86F7",
-        cursorAccent:        "#070F1A",
-        selectionBackground: "rgba(79,134,247,0.2)",
-        black:               "#070F1A",
-        brightBlack:         "#3E5578",
-        cyan:                "#4F86F7",
-        brightCyan:          "#7AAEFF",
-        green:               "#5EBC70",
-        brightGreen:         "#7DC940",
-        yellow:              "#C9AA2A",
-        brightYellow:        "#D4B83A",
-        red:                 "#C23B3B",
-        brightRed:           "#D64F4F",
-        magenta:             "#9B8AFA",
-        blue:                "#4F86F7",
-        white:               "#E4EEFF",
-        brightWhite:         "#F0F4FF",
+        // Backgrounds using HSL-derived values
+        background:          "#0c0e15",  // hsl(230,18%,5%) → terminal bg
+        foreground:          "#d9dde8",  // text-primary
+        cursor:              "#6366f1",  // brand
+        cursorAccent:        "#0c0e15",
+        selectionBackground: "rgba(99, 102, 241, 0.18)",
+        black:               "#0c0e15",
+        brightBlack:         "#505870",
+        cyan:                "#2dd4bf",  // ai / teal
+        brightCyan:          "#5eead4",
+        green:               "#4ade80",  // success
+        brightGreen:         "#86efac",
+        yellow:              "#d4a017",  // warning
+        brightYellow:        "#fbbf24",
+        red:                 "#c0392b",  // error
+        brightRed:           "#ef4444",
+        magenta:             "#a78bfa",  // keyword purple
+        blue:                "#6366f1",  // brand
+        white:               "#d9dde8",
+        brightWhite:         "#f1f3f8",
       },
-      fontFamily: '"JetBrains Mono", "Fira Mono", monospace',
-      fontSize:   12,
-      lineHeight: 1.6,
-      cursorBlink:  true,
-      cursorStyle:  "block",
+      fontFamily: '"JetBrains Mono", "Fira Code", monospace',
+      fontSize: 12,
+      lineHeight: 1.5,
+      cursorBlink: true,
+      cursorStyle: "block",
       disableStdin: false,
-      scrollback:   2000,
-      convertEol:   true,
+      scrollback: 2000,
+      convertEol: true,
     })
 
     const fitAddon = new FitAddon()
@@ -61,12 +67,15 @@ export function SharedTerminal({ output = [], defaultOpen = true, onCommand }: S
     term.open(containerRef.current)
     fitAddon.fit()
 
-    term.writeln("\x1b[34m$\x1b[0m Session started")
+    // Welcome message
+    term.writeln("\x1b[34m$\x1b[0m Session started — iTECify terminal")
     term.writeln("")
     term.write("\x1b[34m$\x1b[0m ")
-    renderedOutputCountRef.current = 0
+    renderedCountRef.current = 0
 
+    // Handle input
     term.onData((data) => {
+      // Enter
       if (data === "\r") {
         const command = inputBufferRef.current.trim()
         term.writeln("")
@@ -78,6 +87,7 @@ export function SharedTerminal({ output = [], defaultOpen = true, onCommand }: S
         return
       }
 
+      // Backspace
       if (data === "\u007f") {
         if (inputBufferRef.current.length > 0) {
           inputBufferRef.current = inputBufferRef.current.slice(0, -1)
@@ -86,6 +96,7 @@ export function SharedTerminal({ output = [], defaultOpen = true, onCommand }: S
         return
       }
 
+      // Ctrl+C
       if (data === "\u0003") {
         inputBufferRef.current = ""
         term.writeln("^C")
@@ -93,13 +104,14 @@ export function SharedTerminal({ output = [], defaultOpen = true, onCommand }: S
         return
       }
 
+      // Printable characters
       if (data >= " " && data !== "\u007f") {
         inputBufferRef.current += data
         term.write(data)
       }
     })
 
-    termRef.current     = term
+    termRef.current = term
     fitAddonRef.current = fitAddon
 
     const ro = new ResizeObserver(() => fitAddonRef.current?.fit())
@@ -108,99 +120,96 @@ export function SharedTerminal({ output = [], defaultOpen = true, onCommand }: S
     return () => {
       ro.disconnect()
       term.dispose()
-      termRef.current     = null
+      termRef.current = null
       fitAddonRef.current = null
     }
   }, [])
 
+  // Refit on open/close
   useEffect(() => {
     if (isOpen) setTimeout(() => fitAddonRef.current?.fit(), 50)
   }, [isOpen])
 
+  // Render incoming output
   useEffect(() => {
     if (!termRef.current || output.length === 0) return
-    const startIndex = Math.max(renderedOutputCountRef.current, 0)
-    const nextLines = output.slice(startIndex)
-    if (nextLines.length === 0) return
+    const start = Math.max(renderedCountRef.current, 0)
+    const newLines = output.slice(start)
+    if (newLines.length === 0) return
 
-    for (const line of nextLines) {
+    for (const line of newLines) {
       termRef.current.writeln(line)
     }
-
-    renderedOutputCountRef.current = output.length
+    renderedCountRef.current = output.length
     termRef.current.write("\x1b[34m$\x1b[0m ")
   }, [output])
 
   function clearTerminal() {
     termRef.current?.clear()
-    renderedOutputCountRef.current = output.length
+    renderedCountRef.current = output.length
     termRef.current?.write("\x1b[34m$\x1b[0m ")
   }
 
+  const tabs = ["terminal", "output"] as const
+
   return (
     <div
-      className="flex flex-col shrink-0 border-t border-border"
-      style={{ background: "var(--terminal-bg)", height: isOpen ? 210 : 33 }}
+      className="flex flex-col h-full border-t border-border"
+      style={{ background: "var(--bg-terminal)" }}
     >
-      {/* Terminal header */}
-      <div
-        className="flex items-center shrink-0 border-b border-border px-3"
-        style={{ height: 33, background: "var(--panel)" }}
-      >
-        {(["terminal", "output"] as const).map(tab => (
+      {/* Header */}
+      <div className="flex items-center h-9 px-3 border-b border-border bg-surface shrink-0">
+        {/* Tabs */}
+        {tabs.map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
-            className="flex items-center gap-1 px-3 h-full text-xs transition-colors capitalize"
-            style={{
-              color:        activeTab === tab ? "var(--foreground)" : "var(--text-sec)",
-              borderBottom: activeTab === tab ? "2px solid var(--accent)" : "2px solid transparent",
-              marginBottom: "-1px",
-            }}
+            className={`
+              flex items-center gap-1 px-3 h-full text-xs capitalize transition-colors
+              border-b-2 -mb-px
+              ${
+                activeTab === tab
+                  ? "text-text-primary border-brand"
+                  : "text-text-secondary border-transparent hover:text-text-primary"
+              }
+            `}
           >
             {tab}
           </button>
         ))}
 
+        {/* Right actions */}
         <div className="flex items-center gap-0.5 ml-auto">
           <button
             onClick={clearTerminal}
-            title="Clear"
-            className="size-[22px] flex items-center justify-center rounded-lg transition-colors"
-            style={{ color: "var(--text-dim)" }}
-            onMouseEnter={e => (e.currentTarget.style.color = "var(--text-sec)")}
-            onMouseLeave={e => (e.currentTarget.style.color = "var(--text-dim)")}
+            title="Clear terminal"
+            className="size-6 flex items-center justify-center rounded-md text-text-tertiary hover:text-text-secondary transition-colors"
           >
             <Trash2 className="size-3" />
           </button>
           <button
             onClick={() => fitAddonRef.current?.fit()}
-            title="Fit"
-            className="size-[22px] flex items-center justify-center rounded-lg transition-colors"
-            style={{ color: "var(--text-dim)" }}
-            onMouseEnter={e => (e.currentTarget.style.color = "var(--text-sec)")}
-            onMouseLeave={e => (e.currentTarget.style.color = "var(--text-dim)")}
+            title="Fit to window"
+            className="size-6 flex items-center justify-center rounded-md text-text-tertiary hover:text-text-secondary transition-colors"
           >
             <Maximize2 className="size-3" />
           </button>
           <button
-            onClick={() => setIsOpen(o => !o)}
+            onClick={() => setIsOpen((o) => !o)}
             title={isOpen ? "Collapse" : "Expand"}
-            className="size-[22px] flex items-center justify-center rounded-lg transition-colors"
-            style={{ color: "var(--text-dim)" }}
-            onMouseEnter={e => (e.currentTarget.style.color = "var(--text-sec)")}
-            onMouseLeave={e => (e.currentTarget.style.color = "var(--text-dim)")}
+            className="size-6 flex items-center justify-center rounded-md text-text-tertiary hover:text-text-secondary transition-colors"
           >
             {isOpen ? <ChevronDown className="size-3" /> : <ChevronUp className="size-3" />}
           </button>
         </div>
       </div>
 
+      {/* Terminal content */}
       {isOpen && (
         <div
           ref={containerRef}
           className="flex-1 min-h-0"
-          style={{ padding: "10px 4px 10px 14px" }}
+          style={{ padding: "8px 4px 8px 12px" }}
         />
       )}
     </div>

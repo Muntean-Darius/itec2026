@@ -3,139 +3,218 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* ── CSS Custom Properties ───────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   iTECify Design System — HSL Color Palette
+   ─────────────────────────────────────────
+   Every color is HSL per the design mandate.
+   Background hue: 230°  |  Brand hue: 239°  |  AI hue: 172°
+   Shades are created by stepping Lightness with constant H+S.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 :root {
-  /* Backgrounds — dark navy */
-  --background:   #0C1929;
-  --panel:        #0F2035;
-  --elevated:     #162840;
-  --terminal-bg:  #070F1A;
-  --ai-block:     #0E1F38;
-  --hover:        #1A3050;
+  /* —— Background Scale ——
+     hsl(230, 13%, L%)  — cool blue-gray, non-fatiguing dark */
+  --bg-base:       hsl(230, 13%, 7%);
+  --bg-surface:    hsl(230, 13%, 10%);
+  --bg-elevated:   hsl(230, 13%, 13%);
+  --bg-hover:      hsl(230, 13%, 16%);
+  --bg-active:     hsl(230, 13%, 20%);
+  --bg-terminal:   hsl(230, 18%, 5%);
 
-  /* Text */
-  --foreground:   #E4EEFF;
-  --text-sec:     #7A9BC4;
-  --text-dim:     #3E5578;
+  /* —— Text Scale ——
+     hsl(224, S%, L%)  — off-white for comfort, no halation */
+  --text-primary:    hsl(224, 20%, 88%);
+  --text-secondary:  hsl(224, 12%, 55%);
+  --text-tertiary:   hsl(224, 8%, 36%);
 
-  /* Primary accent — royal/navy blue */
-  --accent:       #4F86F7;
-  --accent-dim:   rgba(79, 134, 247, 0.15);
-  --accent-glow:  rgba(79, 134, 247, 0.4);
+  /* —— Brand / Primary (Indigo) ——
+     hsl(239, 84%, 67%) ≈ #6366f1 — vibrant, creative, collaborative */
+  --brand:               hsl(239, 84%, 67%);
+  --brand-hover:         hsl(239, 84%, 74%);
+  --brand-foreground:    hsl(230, 40%, 6%);
+  --brand-muted:         hsla(239, 84%, 67%, 0.10);
+  --brand-muted-border:  hsla(239, 84%, 67%, 0.25);
+  --brand-glow:          hsla(239, 84%, 67%, 0.20);
 
-  /* Secondary accent — dark crimson red */
-  --crimson:      #C23B3B;
-  --crimson-dim:  rgba(194, 59, 59, 0.15);
-  --crimson-glow: rgba(194, 59, 59, 0.35);
+  /* —— AI / Agent (Teal) ——
+     Visual distinction: AI = teal, Human = indigo */
+  --ai:               hsl(172, 66%, 50%);
+  --ai-foreground:    hsl(230, 40%, 6%);
+  --ai-muted:         hsla(172, 66%, 50%, 0.10);
+  --ai-muted-border:  hsla(172, 66%, 50%, 0.25);
+  --ai-glow:          hsla(172, 66%, 50%, 0.20);
 
-  /* Additional — green / amber-yellow */
-  --green:        #5EBC70;
-  --lime:         #7DC940;
-  --amber:        #C9AA2A;
+  /* —— Semantic: Success —— */
+  --success:        hsl(150, 55%, 48%);
+  --success-muted:  hsla(150, 55%, 48%, 0.10);
 
-  /* Status palette */
-  --purple:       #9B8AFA;
-  --orange:       #E0834A;
-  --blue:         #4F86F7;
-  --red:          #C23B3B;
+  /* —— Semantic: Warning —— */
+  --warning:        hsl(38, 85%, 55%);
+  --warning-muted:  hsla(38, 85%, 55%, 0.10);
 
-  /* Borders — blue-tinted */
-  --border:        rgba(79, 134, 247, 0.08);
-  --border-strong: rgba(79, 134, 247, 0.16);
+  /* —— Semantic: Error —— */
+  --error:              hsl(0, 62%, 55%);
+  --error-muted:        hsla(0, 62%, 55%, 0.10);
+  --error-muted-border: hsla(0, 62%, 55%, 0.25);
 
-  /* shadcn component aliases */
-  --card:                var(--panel);
-  --card-foreground:     var(--foreground);
-  --popover:             var(--elevated);
-  --popover-foreground:  var(--foreground);
-  --primary:             var(--accent);
-  --primary-foreground:  #050D1F;
-  --secondary:           var(--elevated);
-  --secondary-foreground: var(--foreground);
-  --muted:               var(--elevated);
-  --muted-foreground:    var(--text-sec);
-  --destructive:         var(--red);
-  --destructive-foreground: #fff;
-  --input:               var(--elevated);
-  --ring:                var(--accent);
-  --radius:              10px;
+  /* —— Borders ——
+     Translucent blue-gray for subtle depth */
+  --border-subtle:  hsla(230, 20%, 50%, 0.08);
+  --border-default: hsla(230, 20%, 50%, 0.12);
+  --border-strong:  hsla(230, 20%, 50%, 0.20);
+
+  /* —— Focus —— */
+  --ring: hsl(239, 84%, 67%);
+
+  /* —— Radius —— */
+  --radius: 0.625rem;
+
+  /* ═══ shadcn/ui Compatibility Layer ═══ */
+  --background:           var(--bg-base);
+  --foreground:           var(--text-primary);
+  --card:                 var(--bg-surface);
+  --card-foreground:      var(--text-primary);
+  --popover:              var(--bg-elevated);
+  --popover-foreground:   var(--text-primary);
+  --primary:              var(--brand);
+  --primary-foreground:   var(--brand-foreground);
+  --secondary:            var(--bg-elevated);
+  --secondary-foreground: var(--text-primary);
+  --muted:                var(--bg-elevated);
+  --muted-foreground:     var(--text-secondary);
+  --accent:               var(--bg-hover);
+  --accent-foreground:    var(--text-primary);
+  --destructive:          var(--error);
+  --destructive-foreground: hsl(0, 0%, 100%);
+  --border:               var(--border-subtle);
+  --input:                var(--bg-elevated);
 }
 
-/* ── Tailwind v4 theme tokens ────────────────────────────────────────────── */
+/* ═══ Tailwind v4 Theme Tokens ═══ */
 @theme inline {
   /* Backgrounds */
   --color-background:   var(--background);
-  --color-panel:        var(--panel);
-  --color-elevated:     var(--elevated);
-  --color-terminal-bg:  var(--terminal-bg);
-  --color-hover:        var(--hover);
+  --color-foreground:   var(--foreground);
+  --color-surface:      var(--bg-surface);
+  --color-elevated:     var(--bg-elevated);
+  --color-hover:        var(--bg-hover);
+  --color-active:       var(--bg-active);
+  --color-terminal-bg:  var(--bg-terminal);
 
   /* Text */
-  --color-foreground:   var(--foreground);
-  --color-text-sec:     var(--text-sec);
-  --color-text-dim:     var(--text-dim);
+  --color-text-primary:   var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-tertiary:  var(--text-tertiary);
 
-  /* Accent */
-  --color-accent:            var(--accent);
-  --color-accent-foreground: #050D1F;
+  /* Brand */
+  --color-brand:            var(--brand);
+  --color-brand-hover:      var(--brand-hover);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-brand-muted:      var(--brand-muted);
 
-  /* Secondary */
-  --color-crimson:      var(--crimson);
+  /* AI */
+  --color-ai:            var(--ai);
+  --color-ai-foreground: var(--ai-foreground);
+  --color-ai-muted:      var(--ai-muted);
 
-  /* Additional */
-  --color-green:        var(--green);
-  --color-lime:         var(--lime);
-  --color-amber:        var(--amber);
-
-  /* Status */
-  --color-purple:       var(--purple);
-  --color-orange:       var(--orange);
-  --color-blue:         var(--blue);
-  --color-red:          var(--red);
+  /* Semantic */
+  --color-success:       var(--success);
+  --color-success-muted: var(--success-muted);
+  --color-warning:       var(--warning);
+  --color-warning-muted: var(--warning-muted);
+  --color-error:         var(--error);
+  --color-error-muted:   var(--error-muted);
 
   /* Borders */
   --color-border:        var(--border);
+  --color-border-subtle: var(--border-subtle);
   --color-border-strong: var(--border-strong);
 
   /* shadcn compat */
-  --color-card:                var(--card);
-  --color-card-foreground:     var(--card-foreground);
-  --color-popover:             var(--popover);
-  --color-popover-foreground:  var(--popover-foreground);
-  --color-primary:             var(--primary);
-  --color-primary-foreground:  var(--primary-foreground);
-  --color-secondary:           var(--secondary);
+  --color-card:                 var(--card);
+  --color-card-foreground:      var(--card-foreground);
+  --color-popover:              var(--popover);
+  --color-popover-foreground:   var(--popover-foreground);
+  --color-primary:              var(--primary);
+  --color-primary-foreground:   var(--primary-foreground);
+  --color-secondary:            var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
-  --color-muted:               var(--muted);
-  --color-muted-foreground:    var(--muted-foreground);
-  --color-destructive:         var(--destructive);
-  --color-input:               var(--input);
-  --color-ring:                var(--ring);
+  --color-muted:                var(--muted);
+  --color-muted-foreground:     var(--muted-foreground);
+  --color-accent:               var(--accent);
+  --color-accent-foreground:    var(--accent-foreground);
+  --color-destructive:          var(--destructive);
+  --color-input:                var(--input);
+  --color-ring:                 var(--ring);
 
   /* Fonts */
-  --font-ui:   var(--font-syne);
-  --font-sans: var(--font-dm-sans);
+  --font-sans: var(--font-inter);
   --font-mono: var(--font-jetbrains-mono);
 
-  /* Radius — rounder */
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 16px;
-  --radius-xl: 22px;
+  /* Radius */
+  --radius-sm:  6px;
+  --radius-md:  10px;
+  --radius-lg:  16px;
+  --radius-xl:  22px;
 }
 
-/* ── Base layer ──────────────────────────────────────────────────────────── */
+/* ═══ Base Layer ═══ */
 @layer base {
-  ::-webkit-scrollbar              { width: 5px; height: 5px; }
+  /* Scrollbar — thin, translucent, rounded */
+  ::-webkit-scrollbar              { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track        { background: transparent; }
-  ::-webkit-scrollbar-thumb        { background: rgba(79,134,247,0.15); border-radius: 99px; }
-  ::-webkit-scrollbar-thumb:hover  { background: rgba(79,134,247,0.28); }
+  ::-webkit-scrollbar-thumb        { background: hsla(230, 20%, 50%, 0.12); border-radius: 99px; }
+  ::-webkit-scrollbar-thumb:hover  { background: hsla(230, 20%, 50%, 0.24); }
 
   * { @apply border-border; }
 
   body {
-    @apply bg-background text-foreground font-sans;
-    font-size: 13px;
-    -webkit-font-smoothing: antialiased;
+    @apply bg-background text-foreground font-sans antialiased;
+    font-size: 14px;
   }
+
+  /* Text selection */
+  ::selection {
+    background: hsla(239, 84%, 67%, 0.22);
+    color: var(--text-primary);
+  }
+}
+
+/* ═══ Utilities ═══ */
+
+/* Skeleton shimmer for loading states */
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bg-elevated) 25%,
+    var(--bg-hover) 50%,
+    var(--bg-elevated) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+/* Glass effect for floating elements */
+.glass {
+  background: hsla(230, 13%, 10%, 0.80);
+  backdrop-filter: blur(16px) saturate(1.2);
+  -webkit-backdrop-filter: blur(16px) saturate(1.2);
+}
+
+/* Glow ring for focused/active elements */
+.glow-brand {
+  box-shadow:
+    0 0 0 1px var(--brand-muted-border),
+    0 0 20px var(--brand-glow);
+}
+
+.glow-ai {
+  box-shadow:
+    0 0 0 1px var(--ai-muted-border),
+    0 0 20px var(--ai-glow);
 }

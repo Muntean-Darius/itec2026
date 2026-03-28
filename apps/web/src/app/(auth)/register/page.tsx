@@ -2,107 +2,157 @@
 
 import Link from "next/link"
 import { useActionState } from "react"
+import { motion } from "framer-motion"
 import { signUp } from "@/actions/auth"
 
 export default function RegisterPage() {
   const [state, action, pending] = useActionState(signUp, null)
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="w-full max-w-sm">
-        {/* Logo */}
-        <div className="mb-8">
-          <span className="font-ui font-extrabold text-[28px] tracking-tight text-foreground">
-            i<span style={{ color: "var(--accent)", textShadow: "0 0 12px var(--accent-glow), 0 0 24px rgba(79,134,247,0.2)" }}>TEC</span>ify
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4, ease: [0.25, 0.46, 0.45, 0.94] }}
+      className="w-full max-w-[400px]"
+    >
+      {/* Logo */}
+      <div className="mb-10 text-center">
+        <h1 className="text-3xl font-bold tracking-tight text-text-primary">
+          i
+          <span className="text-brand" style={{ textShadow: "0 0 24px var(--brand-glow)" }}>
+            TEC
           </span>
-        </div>
-
-        {/* Card */}
-        <div
-          className="rounded-2xl overflow-hidden"
-          style={{ background: "var(--panel)", border: "1px solid var(--border)" }}
-        >
-          <div className="p-6 pb-0">
-            <h1 className="font-ui font-bold text-lg text-foreground tracking-tight">Create account</h1>
-            <p className="mt-1 text-xs text-text-sec">Get started with a free iTECify account.</p>
-          </div>
-
-          <form action={action} className="p-6 space-y-3.5">
-            <div className="space-y-1.5">
-              <label htmlFor="name" className="text-xs font-medium text-text-sec">Full name</label>
-              <input
-                id="name"
-                name="name"
-                type="text"
-                placeholder="Ada Lovelace"
-                required
-                autoComplete="name"
-                className="w-full h-9 px-3 rounded-xl text-sm text-foreground placeholder:text-text-dim outline-none transition-colors"
-                style={{ background: "var(--elevated)", border: "1px solid var(--border-strong)" }}
-                onFocus={e => (e.currentTarget.style.borderColor = "var(--accent)")}
-                onBlur={e => (e.currentTarget.style.borderColor = "var(--border-strong)")}
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <label htmlFor="email" className="text-xs font-medium text-text-sec">Email</label>
-              <input
-                id="email"
-                name="email"
-                type="email"
-                placeholder="you@example.com"
-                required
-                autoComplete="email"
-                className="w-full h-9 px-3 rounded-xl text-sm text-foreground placeholder:text-text-dim outline-none transition-colors"
-                style={{ background: "var(--elevated)", border: "1px solid var(--border-strong)" }}
-                onFocus={e => (e.currentTarget.style.borderColor = "var(--accent)")}
-                onBlur={e => (e.currentTarget.style.borderColor = "var(--border-strong)")}
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <label htmlFor="password" className="text-xs font-medium text-text-sec">Password</label>
-              <input
-                id="password"
-                name="password"
-                type="password"
-                placeholder="••••••••"
-                required
-                autoComplete="new-password"
-                minLength={8}
-                className="w-full h-9 px-3 rounded-xl text-sm text-foreground placeholder:text-text-dim outline-none transition-colors"
-                style={{ background: "var(--elevated)", border: "1px solid var(--border-strong)" }}
-                onFocus={e => (e.currentTarget.style.borderColor = "var(--accent)")}
-                onBlur={e => (e.currentTarget.style.borderColor = "var(--border-strong)")}
-              />
-            </div>
-
-            {state?.error && <p className="text-xs" style={{ color: "var(--red)" }}>{state.error}</p>}
-
-            <button
-              type="submit"
-              disabled={pending}
-              className="w-full flex items-center justify-center h-9 rounded-full text-xs font-semibold font-ui disabled:opacity-50 transition-all mt-1"
-              style={{
-                background: "linear-gradient(135deg, rgba(79,134,247,0.22), rgba(79,134,247,0.1))",
-                border: "1px solid rgba(79,134,247,0.4)",
-                color: "var(--accent)",
-              }}
-              onMouseEnter={e => !pending && (e.currentTarget.style.boxShadow = "0 0 18px var(--accent-glow)")}
-              onMouseLeave={e => (e.currentTarget.style.boxShadow = "none")}
-            >
-              {pending ? "Creating account…" : "Create account"}
-            </button>
-          </form>
-        </div>
-
-        <p className="mt-4 text-center text-xs text-text-sec">
-          Already have an account?{" "}
-          <Link href="/login" className="text-accent hover:underline">
-            Sign in
-          </Link>
+          ify
+        </h1>
+        <p className="mt-2 text-sm text-text-secondary">
+          Figma for Code — collaborative sandbox
         </p>
       </div>
-    </div>
+
+      {/* Card */}
+      <div className="rounded-2xl border border-border-strong bg-surface p-8">
+        <div className="mb-6">
+          <h2 className="text-lg font-semibold text-text-primary tracking-tight">
+            Create your account
+          </h2>
+          <p className="mt-1 text-sm text-text-secondary">
+            Get started with iTECify for free.
+          </p>
+        </div>
+
+        <form action={action} className="space-y-5">
+          {/* Name */}
+          <div className="space-y-2">
+            <label htmlFor="name" className="block text-sm font-medium text-text-secondary">
+              Full name
+            </label>
+            <input
+              id="name"
+              name="name"
+              type="text"
+              placeholder="Ada Lovelace"
+              required
+              autoComplete="name"
+              className="
+                w-full h-10 px-3.5 rounded-xl text-sm
+                bg-elevated text-text-primary placeholder:text-text-tertiary
+                border border-border-strong
+                outline-none transition-all duration-200
+                focus:border-brand focus:ring-1 focus:ring-brand/30
+              "
+            />
+          </div>
+
+          {/* Email */}
+          <div className="space-y-2">
+            <label htmlFor="email" className="block text-sm font-medium text-text-secondary">
+              Email
+            </label>
+            <input
+              id="email"
+              name="email"
+              type="email"
+              placeholder="you@example.com"
+              required
+              autoComplete="email"
+              className="
+                w-full h-10 px-3.5 rounded-xl text-sm
+                bg-elevated text-text-primary placeholder:text-text-tertiary
+                border border-border-strong
+                outline-none transition-all duration-200
+                focus:border-brand focus:ring-1 focus:ring-brand/30
+              "
+            />
+          </div>
+
+          {/* Password */}
+          <div className="space-y-2">
+            <label htmlFor="password" className="block text-sm font-medium text-text-secondary">
+              Password
+            </label>
+            <input
+              id="password"
+              name="password"
+              type="password"
+              placeholder="••••••••"
+              required
+              autoComplete="new-password"
+              minLength={8}
+              className="
+                w-full h-10 px-3.5 rounded-xl text-sm
+                bg-elevated text-text-primary placeholder:text-text-tertiary
+                border border-border-strong
+                outline-none transition-all duration-200
+                focus:border-brand focus:ring-1 focus:ring-brand/30
+              "
+            />
+          </div>
+
+          {/* Error */}
+          {state?.error && (
+            <motion.p
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="text-sm text-error rounded-lg bg-error-muted px-3 py-2 border border-[var(--error-muted-border)]"
+            >
+              {state.error}
+            </motion.p>
+          )}
+
+          {/* Submit */}
+          <button
+            type="submit"
+            disabled={pending}
+            className="
+              w-full h-10 rounded-full text-sm font-semibold
+              bg-brand text-brand-foreground
+              hover:bg-brand-hover
+              disabled:opacity-50 disabled:cursor-not-allowed
+              transition-all duration-200
+              shadow-[0_0_0_0_transparent]
+              hover:shadow-[0_0_20px_var(--brand-glow)]
+              active:scale-[0.98]
+            "
+          >
+            {pending ? (
+              <span className="flex items-center justify-center gap-2">
+                <span className="size-4 border-2 border-brand-foreground/30 border-t-brand-foreground rounded-full animate-spin" />
+                Creating account…
+              </span>
+            ) : (
+              "Create account"
+            )}
+          </button>
+        </form>
+      </div>
+
+      {/* Footer link */}
+      <p className="mt-6 text-center text-sm text-text-secondary">
+        Already have an account?{" "}
+        <Link href="/login" className="text-brand hover:text-brand-hover transition-colors">
+          Sign in
+        </Link>
+      </p>
+    </motion.div>
   )
 }

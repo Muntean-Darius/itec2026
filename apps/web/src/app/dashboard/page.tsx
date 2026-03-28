@@ -1,281 +1,387 @@
 "use client"
 
-import { useState, useTransition, useEffect, useCallback } from "react"
+import { useState, useCallback } from "react"
 import { useRouter } from "next/navigation"
-import { Plus, Hash, X, Loader2 } from "lucide-react"
+import { Plus, Hash, X, Loader2, FolderOpen } from "lucide-react"
+import { motion, AnimatePresence } from "framer-motion"
 import { SessionCard } from "@/components/dashboard/SessionCard"
-import { createSession, joinSession, listSessions } from "@/actions/sessions"
-import { supabase } from "@/lib/supabase"
+import { MOCK_SESSIONS, LANGUAGES, LANG_META } from "@/data/mock"
 import type { Session } from "@/types"
 
-const LANGUAGES = ["Python", "JavaScript", "TypeScript", "Go", "Rust", "C++", "Java"]
-
-const LANG_COLORS: Record<string, string> = {
-  Python:     "#3B82F6",
-  JavaScript: "#C9AA2A",
-  TypeScript: "#4F86F7",
-  Go:         "#5EBC70",
-  Rust:       "#E0834A",
-  "C++":      "#9B8AFA",
-  Java:       "#C23B3B",
-}
+// TODO: Replace with real server actions when integrating
+// import { createSession, joinSession, listSessions, deleteSession } from "@/actions/sessions"
 
 export default function DashboardPage() {
   const router = useRouter()
-  const [sessions, setSessions] = useState<Session[]>([])
-  const [loading, setLoading] = useState(true)
+  const [sessions, setSessions] = useState<Session[]>(MOCK_SESSIONS)
   const [showNew, setShowNew] = useState(false)
   const [showJoin, setShowJoin] = useState(false)
   const [newName, setNewName] = useState("")
-  const [newLang, setNewLang] = useState("Python")
+  const [newLang, setNewLang] = useState<string>("Python")
   const [joinCode, setJoinCode] = useState("")
+  const [isPending, setIsPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [isPending, startTransition] = useTransition()
 
-  const loadSessions = useCallback(async () => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-      const data = await listSessions(user.id)
-      setSessions(data)
-    } finally {
-      setLoading(false)
+  const handleCreate = useCallback(() => {
+    if (!newName.trim()) return
+    setIsPending(true)
+    setError(null)
+
+    // Mock: create a new session and navigate
+    const newSession: Session = {
+      id: `sess-${Date.now()}`,
+      name: newName.trim(),
+      language: newLang,
+      ownerId: "user-001",
+      createdAt: new Date().toISOString(),
+      joinCode: newName.trim().toLowerCase().replace(/\s+/g, "-"),
     }
+
+    setSessions((prev) => [newSession, ...prev])
+    setShowNew(false)
+    setNewName("")
+    setIsPending(false)
+    router.push(`/session/${newSession.id}`)
+  }, [newName, newLang, router])
+
+  const handleJoin = useCallback(() => {
+    if (!joinCode.trim()) return
+    setIsPending(true)
+    setError(null)
+
+    // Mock: find session by join code
+    const found = sessions.find((s) => s.joinCode === joinCode.trim())
+    if (found) {
+      setShowJoin(false)
+      setJoinCode("")
+      setIsPending(false)
+      router.push(`/session/${found.id}`)
+    } else {
+      setError("Session not found. Check the invite code and try again.")
+      setIsPending(false)
+    }
+  }, [joinCode, sessions, router])
+
+  const handleDelete = useCallback((id: string) => {
+    setSessions((prev) => prev.filter((s) => s.id !== id))
   }, [])
 
-  useEffect(() => { loadSessions() }, [loadSessions])
-
-  function handleCreate() {
-    if (!newName.trim()) return
+  const closeModals = useCallback(() => {
+    setShowNew(false)
+    setShowJoin(false)
     setError(null)
-    startTransition(async () => {
-      try {
-        const { data: { user } } = await supabase.auth.getUser()
-        if (!user) { setError("Not signed in"); return }
-        const session = await createSession(newName.trim(), newLang, user.id)
-        setShowNew(false)
-        setNewName("")
-        router.push(`/session/${session.id}`)
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Failed to create session")
-      }
-    })
-  }
-
-  function handleJoin() {
-    if (!joinCode.trim()) return
-    setError(null)
-    startTransition(async () => {
-      try {
-        const session = await joinSession(joinCode.trim())
-        setShowJoin(false)
-        setJoinCode("")
-        router.push(`/session/${session.id}`)
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Session not found")
-      }
-    })
-  }
+  }, [])
 
   return (
-    <div className="flex flex-col flex-1 p-8">
+    <div className="flex flex-col flex-1 p-8 max-w-6xl">
       {/* Header */}
       <div className="flex items-start justify-between mb-8">
         <div>
-          <h1 className="font-ui font-bold text-xl text-foreground tracking-tight">Sessions</h1>
-          <p className="mt-0.5 text-xs text-text-sec">Create or join a collaborative coding session</p>
+          <h1 className="text-xl font-bold text-text-primary tracking-tight">
+            Sessions
+          </h1>
+          <p className="mt-1 text-sm text-text-secondary">
+            Create or join a collaborative coding session.
+          </p>
         </div>
+
         <div className="flex items-center gap-2">
           <button
-            onClick={() => { setError(null); setShowJoin(true) }}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-full text-xs text-text-sec border border-border-strong bg-elevated hover:text-accent transition-all"
-            style={{ borderColor: "var(--border-strong)" }}
-            onMouseEnter={e => (e.currentTarget.style.borderColor = "rgba(79,134,247,0.4)")}
-            onMouseLeave={e => (e.currentTarget.style.borderColor = "var(--border-strong)")}
+            onClick={() => {
+              setError(null)
+              setShowJoin(true)
+            }}
+            className="
+              flex items-center gap-2 px-4 py-2 rounded-lg text-sm
+              bg-elevated text-text-secondary
+              border border-border-strong
+              hover:text-text-primary hover:border-brand-muted-border
+              transition-all duration-150
+            "
           >
-            <Hash className="size-3.5" />
+            <Hash className="size-4" />
             Join Session
           </button>
+
           <button
-            onClick={() => { setError(null); setShowNew(true) }}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-semibold transition-all"
-            style={{
-              background: "linear-gradient(135deg, rgba(79,134,247,0.22), rgba(79,134,247,0.1))",
-              border: "1px solid rgba(79,134,247,0.4)",
-              color: "var(--accent)",
+            onClick={() => {
+              setError(null)
+              setShowNew(true)
             }}
-            onMouseEnter={e => (e.currentTarget.style.boxShadow = "0 0 18px var(--accent-glow)")}
-            onMouseLeave={e => (e.currentTarget.style.boxShadow = "none")}
+            className="
+              flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold
+              bg-brand text-brand-foreground
+              hover:bg-brand-hover
+              hover:shadow-[0_0_20px_var(--brand-glow)]
+              transition-all duration-200 active:scale-[0.98]
+            "
           >
-            <Plus className="size-3.5" />
+            <Plus className="size-4" />
             New Session
           </button>
         </div>
       </div>
 
       {/* Session grid */}
-      {loading ? (
-        <div className="flex flex-1 items-center justify-center">
-          <Loader2 className="size-4 animate-spin text-text-dim" />
-        </div>
-      ) : sessions.length > 0 ? (
-        <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}>
-          {sessions.map(s => (
+      {sessions.length > 0 ? (
+        <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(280px,1fr))]">
+          {sessions.map((s, i) => (
             <SessionCard
               key={s.id}
               session={s}
-              langColor={LANG_COLORS[s.language] ?? "#7A9BC4"}
+              index={i}
               onOpen={() => router.push(`/session/${s.id}`)}
+              onDelete={() => handleDelete(s.id)}
             />
           ))}
         </div>
       ) : (
-        <div className="flex flex-1 items-center justify-center rounded-2xl border border-dashed border-border">
-          <div className="text-center">
-            <p className="text-sm font-medium text-foreground">No sessions yet</p>
-            <p className="mt-1 text-xs text-text-sec">Create a new session to get started</p>
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-border-strong"
+        >
+          <div className="text-center py-16">
+            <FolderOpen className="size-10 text-text-tertiary mx-auto mb-4" />
+            <p className="text-sm font-medium text-text-primary">No sessions yet</p>
+            <p className="mt-1 text-sm text-text-secondary">
+              Create a new session to get started.
+            </p>
           </div>
-        </div>
+        </motion.div>
       )}
 
-      {/* ── New Session Modal ── */}
-      {showNew && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(7,15,26,0.75)" }}>
-          <div
-            className="w-full max-w-sm rounded-2xl overflow-hidden"
-            style={{
-              background: "var(--elevated)",
-              border: "1px solid rgba(79,134,247,0.35)",
-              boxShadow: "0 0 0 1px rgba(79,134,247,0.12), 0 8px 40px rgba(0,0,0,0.7), 0 0 80px rgba(79,134,247,0.06)",
-            }}
+      {/* ═══ New Session Modal ═══ */}
+      <AnimatePresence>
+        {showNew && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="fixed inset-0 z-50 flex items-center justify-center"
+            style={{ background: "hsla(230, 13%, 4%, 0.75)" }}
+            onClick={closeModals}
           >
-            <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-              <span className="font-ui font-bold text-sm text-foreground">New Session</span>
-              <button onClick={() => setShowNew(false)} disabled={isPending} className="text-text-dim hover:text-text-sec transition-colors">
-                <X className="size-4" />
-              </button>
-            </div>
-            <div className="p-4 space-y-3">
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-text-sec">Session name</label>
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 8 }}
+              transition={{ duration: 0.2, ease: [0.25, 0.46, 0.45, 0.94] }}
+              className="w-full max-w-md rounded-2xl border border-border-strong overflow-hidden"
+              style={{
+                background: "var(--bg-elevated)",
+                boxShadow: "0 0 0 1px var(--border-subtle), 0 16px 48px hsla(230, 13%, 4%, 0.6), 0 0 80px var(--brand-glow)",
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+                <h3 className="font-semibold text-text-primary">New Session</h3>
+                <button
+                  onClick={closeModals}
+                  disabled={isPending}
+                  className="size-7 flex items-center justify-center rounded-lg text-text-tertiary hover:text-text-primary hover:bg-hover transition-all"
+                >
+                  <X className="size-4" />
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="p-5 space-y-5">
+                {/* Name */}
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-text-secondary">
+                    Session name
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="my-awesome-project"
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleCreate()}
+                    autoFocus
+                    disabled={isPending}
+                    className="
+                      w-full h-10 px-3.5 rounded-xl text-sm
+                      bg-surface text-text-primary placeholder:text-text-tertiary
+                      border border-border-strong
+                      outline-none transition-all duration-200
+                      focus:border-brand focus:ring-1 focus:ring-brand/30
+                    "
+                  />
+                </div>
+
+                {/* Language */}
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-text-secondary">
+                    Language
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {LANGUAGES.map((lang) => {
+                      const active = newLang === lang
+                      const meta = LANG_META[lang]
+                      return (
+                        <button
+                          key={lang}
+                          onClick={() => setNewLang(lang)}
+                          disabled={isPending}
+                          className={`
+                            flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium
+                            border transition-all duration-150
+                            ${
+                              active
+                                ? "bg-brand-muted text-brand border-[var(--brand-muted-border)]"
+                                : "bg-surface text-text-secondary border-border-strong hover:text-text-primary hover:border-border-strong"
+                            }
+                          `}
+                        >
+                          <span
+                            className="size-2 rounded-full shrink-0"
+                            style={{ background: meta?.color }}
+                          />
+                          {lang}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                {/* Error */}
+                {error && (
+                  <motion.p
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="text-sm text-error"
+                  >
+                    {error}
+                  </motion.p>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="flex justify-end gap-2 px-5 py-4 border-t border-border">
+                <button
+                  onClick={closeModals}
+                  disabled={isPending}
+                  className="px-4 py-2 rounded-lg text-sm text-text-secondary hover:text-text-primary transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleCreate}
+                  disabled={!newName.trim() || isPending}
+                  className="
+                    flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold
+                    bg-brand text-brand-foreground
+                    hover:bg-brand-hover disabled:opacity-40 disabled:cursor-not-allowed
+                    transition-all duration-200 active:scale-[0.98]
+                  "
+                >
+                  {isPending && <Loader2 className="size-4 animate-spin" />}
+                  {isPending ? "Creating…" : "Create Session"}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ═══ Join Session Modal ═══ */}
+      <AnimatePresence>
+        {showJoin && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="fixed inset-0 z-50 flex items-center justify-center"
+            style={{ background: "hsla(230, 13%, 4%, 0.75)" }}
+            onClick={closeModals}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 8 }}
+              transition={{ duration: 0.2, ease: [0.25, 0.46, 0.45, 0.94] }}
+              className="w-full max-w-md rounded-2xl border border-border-strong overflow-hidden"
+              style={{
+                background: "var(--bg-elevated)",
+                boxShadow: "0 0 0 1px var(--border-subtle), 0 16px 48px hsla(230, 13%, 4%, 0.6)",
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+                <h3 className="font-semibold text-text-primary">Join Session</h3>
+                <button
+                  onClick={closeModals}
+                  disabled={isPending}
+                  className="size-7 flex items-center justify-center rounded-lg text-text-tertiary hover:text-text-primary hover:bg-hover transition-all"
+                >
+                  <X className="size-4" />
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="p-5 space-y-2">
+                <label className="block text-sm font-medium text-text-secondary">
+                  Invite code
+                </label>
                 <input
                   type="text"
-                  placeholder="my-project"
-                  value={newName}
-                  onChange={e => setNewName(e.target.value)}
-                  onKeyDown={e => e.key === "Enter" && handleCreate()}
-                  className="w-full h-8 px-2.5 rounded-xl text-sm text-foreground placeholder:text-text-dim outline-none transition-colors"
-                  style={{ background: "var(--panel)", border: "1px solid var(--border-strong)" }}
-                  onFocus={e => (e.currentTarget.style.borderColor = "var(--accent)")}
-                  onBlur={e => (e.currentTarget.style.borderColor = "var(--border-strong)")}
+                  placeholder="Enter session invite code"
+                  value={joinCode}
+                  onChange={(e) => setJoinCode(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleJoin()}
                   autoFocus
                   disabled={isPending}
+                  className="
+                    w-full h-10 px-3.5 rounded-xl text-sm font-mono
+                    bg-surface text-text-primary placeholder:text-text-tertiary
+                    border border-border-strong
+                    outline-none transition-all duration-200
+                    focus:border-brand focus:ring-1 focus:ring-brand/30
+                  "
                 />
+                {error && (
+                  <motion.p
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="text-sm text-error mt-2"
+                  >
+                    {error}
+                  </motion.p>
+                )}
               </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-text-sec">Language</label>
-                <div className="flex flex-wrap gap-1.5">
-                  {LANGUAGES.map(lang => (
-                    <button
-                      key={lang}
-                      onClick={() => setNewLang(lang)}
-                      disabled={isPending}
-                      className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs transition-all"
-                      style={{
-                        background: newLang === lang ? "rgba(79,134,247,0.12)" : "var(--panel)",
-                        border: newLang === lang ? "1px solid rgba(79,134,247,0.4)" : "1px solid var(--border-strong)",
-                        color: newLang === lang ? "var(--accent)" : "var(--text-sec)",
-                      }}
-                    >
-                      <span className="size-1.5 rounded-full shrink-0" style={{ background: LANG_COLORS[lang] }} />
-                      {lang}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              {error && <p className="text-xs" style={{ color: "var(--red)" }}>{error}</p>}
-            </div>
-            <div className="flex justify-end gap-2 px-4 py-3 border-t border-border">
-              <button
-                onClick={() => setShowNew(false)}
-                disabled={isPending}
-                className="px-4 py-1.5 rounded-full text-xs text-text-sec hover:text-foreground transition-colors disabled:opacity-40"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleCreate}
-                disabled={!newName.trim() || isPending}
-                className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold disabled:opacity-40 transition-all"
-                style={{
-                  background: "linear-gradient(135deg, rgba(79,134,247,0.22), rgba(79,134,247,0.1))",
-                  border: "1px solid rgba(79,134,247,0.4)",
-                  color: "var(--accent)",
-                }}
-              >
-                {isPending && <Loader2 className="size-3 animate-spin" />}
-                {isPending ? "Creating…" : "Create Session"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
-      {/* ── Join Session Modal ── */}
-      {showJoin && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(7,15,26,0.75)" }}>
-          <div
-            className="w-full max-w-sm rounded-2xl overflow-hidden"
-            style={{ background: "var(--elevated)", border: "1px solid var(--border-strong)", boxShadow: "0 8px 40px rgba(0,0,0,0.7)" }}
-          >
-            <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-              <span className="font-ui font-bold text-sm text-foreground">Join Session</span>
-              <button onClick={() => setShowJoin(false)} disabled={isPending} className="text-text-dim hover:text-text-sec transition-colors">
-                <X className="size-4" />
-              </button>
-            </div>
-            <div className="p-4 space-y-1.5">
-              <label className="text-xs font-medium text-text-sec">Session code</label>
-              <input
-                type="text"
-                placeholder="Enter invite code"
-                value={joinCode}
-                onChange={e => setJoinCode(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && handleJoin()}
-                className="w-full h-8 px-2.5 rounded-xl text-sm text-foreground placeholder:text-text-dim outline-none font-mono transition-colors"
-                style={{ background: "var(--panel)", border: "1px solid var(--border-strong)" }}
-                onFocus={e => (e.currentTarget.style.borderColor = "var(--accent)")}
-                onBlur={e => (e.currentTarget.style.borderColor = "var(--border-strong)")}
-                autoFocus
-                disabled={isPending}
-              />
-              {error && <p className="text-xs mt-1.5" style={{ color: "var(--red)" }}>{error}</p>}
-            </div>
-            <div className="flex justify-end gap-2 px-4 py-3 border-t border-border">
-              <button
-                onClick={() => setShowJoin(false)}
-                disabled={isPending}
-                className="px-4 py-1.5 rounded-full text-xs text-text-sec hover:text-foreground transition-colors disabled:opacity-40"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleJoin}
-                disabled={!joinCode.trim() || isPending}
-                className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold disabled:opacity-40 transition-all"
-                style={{
-                  background: "linear-gradient(135deg, rgba(79,134,247,0.22), rgba(79,134,247,0.1))",
-                  border: "1px solid rgba(79,134,247,0.4)",
-                  color: "var(--accent)",
-                }}
-              >
-                {isPending && <Loader2 className="size-3 animate-spin" />}
-                {isPending ? "Joining…" : "Join"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+              {/* Footer */}
+              <div className="flex justify-end gap-2 px-5 py-4 border-t border-border">
+                <button
+                  onClick={closeModals}
+                  disabled={isPending}
+                  className="px-4 py-2 rounded-lg text-sm text-text-secondary hover:text-text-primary transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleJoin}
+                  disabled={!joinCode.trim() || isPending}
+                  className="
+                    flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold
+                    bg-brand text-brand-foreground
+                    hover:bg-brand-hover disabled:opacity-40 disabled:cursor-not-allowed
+                    transition-all duration-200 active:scale-[0.98]
+                  "
+                >
+                  {isPending && <Loader2 className="size-4 animate-spin" />}
+                  {isPending ? "Joining…" : "Join Session"}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }
