@@ -1,7 +1,16 @@
 import type { Server as HttpServer, IncomingMessage } from "node:http";
+import { createRequire } from "node:module";
 
-import { setupWSConnection } from "@y/websocket-server/utils";
 import { WebSocketServer } from "ws";
+
+const require = createRequire(import.meta.url);
+const { setupWSConnection } = require("y-websocket-legacy/bin/utils") as {
+	setupWSConnection: (
+		conn: import("ws").WebSocket,
+		req: IncomingMessage,
+		opts?: { docName?: string; gc?: boolean },
+	) => void;
+};
 
 function normalizePath(value: string): string {
 if (!value.startsWith("/")) {

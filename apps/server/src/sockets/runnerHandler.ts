@@ -74,9 +74,17 @@ export function registerRunnerHandlers(
 	});
 
 	socket.on("terminal-input", (payload: TerminalBroadcastPayload) => {
-		socket.to(projectId).emit("terminal-broadcast", {
+		io.to(projectId).emit("terminal-broadcast", {
 			from: socket.id,
 			command: payload.command,
+			timestamp: payload.timestamp,
+		});
+		io.to(projectId).emit("runner:stdin", {
+			from: socket.id,
+			data: payload.command,
+		});
+		emitTerminalOutput(io, projectId, "stdout", `$ ${payload.command}`, {
+			from: socket.id,
 			timestamp: payload.timestamp,
 		});
 		handlers?.onTerminalInput?.({ projectId, socketId: socket.id, payload });

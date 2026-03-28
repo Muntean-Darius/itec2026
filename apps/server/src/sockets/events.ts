@@ -106,6 +106,14 @@ export type AiMergeResultPayload = {
 	timestamp: string;
 };
 
+export type AiProposalActionPayload = {
+	from: string;
+	requestId: string;
+	action: "accept" | "reject";
+	appliedCode?: string;
+	timestamp: string;
+};
+
 export interface ClientToServerEvents {
 	"collab:op": (payload: CollabOperationPayload) => void;
 	"collab:cursor": (payload: CursorPayload) => void;
@@ -118,6 +126,11 @@ export interface ClientToServerEvents {
 	"terminal-input": (payload: TerminalBroadcastPayload) => void;
 	"ai:generate": (payload: AiGenerateRequestPayload) => void;
 	"ai:smart-merge": (payload: AiSmartMergeRequestPayload) => void;
+	"ai:proposal-action": (payload: {
+		requestId: string;
+		action: "accept" | "reject";
+		appliedCode?: string;
+	}) => void;
 }
 
 export interface ServerToClientEvents {
@@ -136,6 +149,7 @@ export interface ServerToClientEvents {
 	"ai:state": (payload: AiStatePayload) => void;
 	"ai:proposal": (payload: AiProposalPayload) => void;
 	"ai:merge-result": (payload: AiMergeResultPayload) => void;
+	"ai:proposal-action": (payload: AiProposalActionPayload) => void;
 }
 
 export interface InterServerEvents {}
