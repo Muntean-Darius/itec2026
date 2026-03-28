@@ -41,6 +41,7 @@ import { AIPanel } from "./ai-panel"
 import { NewFileDialog } from "./new-file-dialog"
 import { useCollaboration } from "@/lib/collaboration"
 import { cn } from "@/lib/utils"
+import { getWorkspaceInviteUrl } from "@/lib/workspace-share"
 
 interface WorkspaceShellProps {
   project: Project
@@ -114,6 +115,9 @@ export function WorkspaceShell({
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
   const [linkCopied, setLinkCopied] = useState(false)
   const [tabContextMenu, setTabContextMenu] = useState<{ x: number; y: number; path: string } | null>(null)
+  const shareUrl = typeof window !== "undefined"
+    ? getWorkspaceInviteUrl(project.id, window.location.origin)
+    : ""
 
   useEffect(() => {
     setTimelineSnapshots(
@@ -1129,7 +1133,7 @@ export function WorkspaceShell({
           <div className="flex items-center gap-2">
             <Input
               readOnly
-              value={typeof window !== "undefined" ? `${window.location.origin}/workspace/join/${project.id}` : ""}
+              value={shareUrl}
               className="flex-1 text-sm"
               onFocus={(e) => e.target.select()}
             />
@@ -1138,7 +1142,7 @@ export function WorkspaceShell({
               size="sm"
               className="shrink-0 gap-1.5"
               onClick={() => {
-                navigator.clipboard.writeText(`${window.location.origin}/workspace/join/${project.id}`)
+                navigator.clipboard.writeText(shareUrl)
                 setLinkCopied(true)
                 setTimeout(() => setLinkCopied(false), 2000)
               }}
