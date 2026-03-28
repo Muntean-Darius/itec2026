@@ -38,8 +38,20 @@ interface AwarenessState {
   [key: string]: unknown
 }
 
+export type DockerStatus = "creating" | "ready" | "error" | null
+
+export interface DockerStats {
+  cpuPercent: number
+  memoryUsageMB: number
+  memoryLimitMB: number
+  memoryPercent: number
+}
+
 export interface UseCollaborationReturn {
   connected: boolean
+  dockerStatus: DockerStatus
+  dockerError: string | null
+  dockerStats: DockerStats | null
   files: FileNode[]
   presence: PresenceUser[]
   localClientId: number | null
@@ -125,6 +137,9 @@ export function useCollaboration({
   const [terminalSessions, setTerminalSessions] = useState<TerminalSession[]>([])
   const [aiChatSessions, setAIChatSessions] = useState<AIChatSession[]>([])
   const [aiAgents, setAIAgents] = useState<AIAgent[]>([])
+  const [dockerStatus, setDockerStatus] = useState<DockerStatus>(null)
+  const [dockerError, setDockerError] = useState<string | null>(null)
+  const [dockerStats, setDockerStats] = useState<DockerStats | null>(null)
 
   // ── Sync helpers ──
 
@@ -445,6 +460,21 @@ export function useCollaboration({
       socket.on("room-users", () => syncPresence())
       socket.on("user-joined", () => syncPresence())
       socket.on("user-left", () => syncPresence())
+
+      // ── Docker status ──
+      socket.on("docker-status", (msg: { status: string; error?: string }) => {
+        if (!destroyed) {
+          setDockerStatus(msg.status as DockerStatus)
+          setDockerError(msg.error ?? null)
+        }
+      })
+
+      // ── Docker stats ──
+      socket.on("docker-stats", (msg: { cpuPercent: number; memoryUsageMB: number; memoryLimitMB: number; memoryPercent: number }) => {
+        if (!destroyed) {
+          setDockerStats(msg)
+        }
+      })
 
       // ── Doc updates → server ──
       const onDocUpdate = (update: Uint8Array, origin: unknown) => {
@@ -883,6 +913,9 @@ export function useCollaboration({
 
   return {
     connected,
+    dockerStatus,
+    dockerError,
+    dockerStats,
     files,
     presence,
     localClientId,
