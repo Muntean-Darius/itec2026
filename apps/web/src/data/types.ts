@@ -86,6 +86,7 @@ export interface Snapshot {
   /** Number of lines changed since previous snapshot */
   changeCount: number
   userId: string
+  userName?: string
   /** Type of snapshot for visual distinction in timeline */
   kind: SnapshotKind
   /** For AI snapshots: summary of the AI action (e.g., "Refactored Auth Flow") */
