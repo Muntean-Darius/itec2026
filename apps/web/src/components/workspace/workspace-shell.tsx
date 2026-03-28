@@ -60,7 +60,7 @@ const TERMINAL_MAX = 500
 const TERMINAL_DEFAULT = 220
 const AGENT_PANEL_MIN = 220
 const AGENT_PANEL_MAX = 400
-const AGENT_PANEL_DEFAULT = 280
+const AGENT_PANEL_DEFAULT = AGENT_PANEL_MAX
 
 export function WorkspaceShell({
   project,

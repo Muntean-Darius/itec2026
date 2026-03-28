@@ -471,7 +471,7 @@ function ChatView({
 
       {/* Messages */}
       <ScrollArea className="flex-1" ref={scrollRef}>
-        <div className="mx-auto w-full max-w-lg p-3 space-y-3">
+        <div className="p-3 space-y-3">
           {!activeChat && chatSessions.length === 0 && (
             <EmptyState agents={activeAgents} onStartChat={(agentId) => {
               if (agentId) {
@@ -518,7 +518,6 @@ function ChatView({
 
       {/* Input area */}
       <div className="border-t border-border-subtle p-2">
-        <div className="mx-auto w-full max-w-lg">
         {/* Agent selector */}
         <div className="flex items-center gap-1.5 mb-2">
           {selectedAgent && (
@@ -559,7 +558,6 @@ function ChatView({
               <Send className="h-3.5 w-3.5" />
             )}
           </Button>
-        </div>
         </div>
       </div>
 

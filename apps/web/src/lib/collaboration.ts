@@ -673,18 +673,54 @@ export function useCollaboration({
       agentName: string
       agentInstructions?: string
     }) => {
+      const messageId = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+
+      // Optimistically write the user message into the Yjs doc so the UI updates immediately
+      const Y = yjsRef.current
+      const doc = ydocRef.current
+      if (Y && doc) {
+        const aiChatsMap = doc.getMap("aiChats")
+        doc.transact(() => {
+          let chatMap = aiChatsMap.get(opts.chatId)
+          if (!chatMap || !(chatMap instanceof Y.Map)) {
+            chatMap = new Y.Map()
+            ;(chatMap as InstanceType<typeof Y.Map>).set("agentId", opts.agentId)
+            ;(chatMap as InstanceType<typeof Y.Map>).set("agentName", opts.agentName)
+            ;(chatMap as InstanceType<typeof Y.Map>).set("isGenerating", true)
+            ;(chatMap as InstanceType<typeof Y.Map>).set("messages", new Y.Array())
+            ;(chatMap as InstanceType<typeof Y.Map>).set("input", new Y.Text())
+            aiChatsMap.set(opts.chatId, chatMap)
+          } else {
+            ;(chatMap as InstanceType<typeof Y.Map>).set("isGenerating", true)
+          }
+          const messagesArr = (chatMap as InstanceType<typeof Y.Map>).get("messages")
+          if (messagesArr instanceof Y.Array) {
+            messagesArr.push([{
+              id: messageId,
+              role: "user",
+              content: opts.content,
+              userId: currentUser.id,
+              userName: currentUser.name,
+              timestamp: Date.now(),
+            }])
+          }
+        })
+      }
+
+      // Emit to server for AI processing
       const socket = socketRef.current
-      if (!socket) return
-      socket.emit("ai-chat", {
-        chatId: opts.chatId,
-        messageId: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        content: opts.content,
-        userId: currentUser.id,
-        userName: currentUser.name,
-        agentId: opts.agentId,
-        agentName: opts.agentName,
-        agentInstructions: opts.agentInstructions,
-      })
+      if (socket) {
+        socket.emit("ai-chat", {
+          chatId: opts.chatId,
+          messageId,
+          content: opts.content,
+          userId: currentUser.id,
+          userName: currentUser.name,
+          agentId: opts.agentId,
+          agentName: opts.agentName,
+          agentInstructions: opts.agentInstructions,
+        })
+      }
     },
     [currentUser.id, currentUser.name]
   )
