@@ -245,6 +245,7 @@ export function CodeEditor({ file, readOnly = false, yText, awareness, onContent
   const bindingRef = useRef<any>(null)
   const editorRef = useRef<any>(null)
   /* eslint-enable @typescript-eslint/no-explicit-any */
+  const cursorStyleRef = useRef<HTMLStyleElement | null>(null)
 
   useEffect(() => {
     // Dynamic import to avoid SSR issues
@@ -252,6 +253,79 @@ export function CodeEditor({ file, readOnly = false, yText, awareness, onContent
       setMonacoEditor(() => mod.default)
     })
   }, [])
+
+  // Inject dynamic CSS for remote user cursors based on awareness state
+  useEffect(() => {
+    if (!awareness) return
+    const aw = awareness as any
+
+    const style = document.createElement("style")
+    style.setAttribute("data-itecify-cursors", "true")
+    document.head.appendChild(style)
+    cursorStyleRef.current = style
+
+    const updateCursorStyles = () => {
+      const states = aw.getStates() as Map<number, Record<string, unknown>>
+      const doc = aw.doc
+      const localClientId = doc?.clientID
+      let css = ""
+
+      states.forEach((state, clientId) => {
+        if (clientId === localClientId) return
+        const color = (state.color as string) || "hsl(172, 66%, 50%)"
+        const name = (state.name as string) || (state.user as Record<string, unknown>)?.name as string || "User"
+
+        // Escape name for CSS content
+        const safeName = name.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+
+        css += `
+          .yRemoteSelection-${clientId} {
+            background-color: ${color}33;
+          }
+          .yRemoteSelectionHead-${clientId},
+          .yRemoteSelectionHead-${clientId}::after {
+            border-left: 2px solid ${color};
+          }
+          .yRemoteSelectionHead-${clientId} {
+            position: relative;
+            display: inline-block;
+            width: 0;
+            height: 100%;
+            margin-left: -2px;
+            vertical-align: text-top;
+          }
+          .yRemoteSelectionHead-${clientId}::after {
+            position: absolute;
+            content: "${safeName}";
+            color: hsl(230, 40%, 98%);
+            background-color: ${color};
+            border-radius: 2px 4px 4px 0;
+            padding: 0 4px;
+            font-size: 10px;
+            font-family: var(--font-inter), sans-serif;
+            font-weight: 500;
+            line-height: 16px;
+            white-space: nowrap;
+            bottom: 100%;
+            left: -2px;
+            pointer-events: none;
+            z-index: 50;
+          }
+        `
+      })
+
+      style.textContent = css
+    }
+
+    updateCursorStyles()
+    aw.on("change", updateCursorStyles)
+
+    return () => {
+      aw.off("change", updateCursorStyles)
+      style.remove()
+      cursorStyleRef.current = null
+    }
+  }, [awareness])
 
   // Cleanup binding on unmount
   useEffect(() => {
@@ -263,6 +337,21 @@ export function CodeEditor({ file, readOnly = false, yText, awareness, onContent
 
   // Find the first pending AI block for this file
   const pendingBlock = aiBlocks?.find((b) => b.status === "pending")
+
+  // Force Monaco to repaint when awareness changes so remote cursors
+  // are always visible, even when the editor is not focused.
+  useEffect(() => {
+    if (!awareness) return
+    const aw = awareness as any
+    const forceRender = () => {
+      // Let y-monaco's _rerenderDecorations run first, then force a visual repaint
+      requestAnimationFrame(() => {
+        editorRef.current?.render(true)
+      })
+    }
+    aw.on("change", forceRender)
+    return () => aw.off("change", forceRender)
+  }, [awareness])
 
   const handleEditorMount = useCallback(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
