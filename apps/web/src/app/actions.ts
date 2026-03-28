@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/server"
 import { PrismaClient } from "@/generated/prisma/client"
 import { PrismaPg } from "@prisma/adapter-pg"
 import { getAuthUser } from "@/data/queries"
+import type { Snapshot } from "@/data/types"
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
 const prisma = new PrismaClient({ adapter })
@@ -165,4 +166,58 @@ export async function joinProject(projectId: string) {
 
   revalidatePath("/dashboard")
   redirect(`/workspace/${projectId}`)
+}
+
+type CreateSnapshotInput = {
+  projectId: string
+  kind: "cron" | "ai" | "human"
+  label?: string | null
+  promptSummary?: string
+  filePath?: string
+  fileStates?: Record<string, string>
+  changeCount?: number
+}
+
+export async function createSnapshot(input: CreateSnapshotInput): Promise<{ snapshot?: Snapshot; error?: string }> {
+  const user = await getAuthUser()
+  if (!user) return { error: "Not authenticated." }
+
+  const membership = await prisma.projectMembership.findUnique({
+    where: { userId_projectId: { userId: user.id, projectId: input.projectId } },
+  })
+  if (!membership) return { error: "Access denied." }
+
+  const fileStates = input.fileStates ?? {}
+  const blob = Buffer.from(JSON.stringify(fileStates), "utf8")
+
+  const created = await prisma.snapshot.create({
+    data: {
+      projectId: input.projectId,
+      userId: user.id,
+      kind: input.kind,
+      label: input.label ?? null,
+      changeCount: input.changeCount ?? 0,
+      promptSummary: input.promptSummary ?? null,
+      filePath: input.filePath ?? null,
+      fileStates,
+      blob,
+    },
+  })
+
+  revalidatePath(`/workspace/${input.projectId}`)
+
+  return {
+    snapshot: {
+      id: created.id,
+      projectId: created.projectId,
+      createdAt: created.createdAt.toISOString(),
+      label: created.label,
+      changeCount: created.changeCount,
+      userId: created.userId,
+      kind: created.kind,
+      promptSummary: created.promptSummary ?? undefined,
+      filePath: created.filePath ?? undefined,
+      fileStates: (created.fileStates as Record<string, string> | null) ?? undefined,
+    },
+  }
 }

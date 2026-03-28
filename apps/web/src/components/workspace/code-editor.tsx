@@ -1,10 +1,12 @@
 "use client"
 
 import { useRef, useEffect, useState, useCallback, useMemo } from "react"
-import { Check, X, Sparkles } from "lucide-react"
+import { motion, AnimatePresence } from "framer-motion"
+import { Check, X, Sparkles, Undo2, Redo2 } from "lucide-react"
 import type { FileNode, FileOperation } from "@/data/types"
 import { cn } from "@/lib/utils"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
 
 /** Pending AI operation on this file (from AI chat messages) */
 export interface AIBlock {
@@ -14,6 +16,31 @@ export interface AIBlock {
   operation: FileOperation
   status: "pending" | "accepted" | "rejected"
   agentColor?: string
+}
+
+/** Recently accepted AI block for quick-undo */
+export interface RecentAIAccept {
+  messageId: string
+  chatId: string
+  operationIndex: number
+  originalContent: string
+  /** The new content after AI change (for redo) */
+  newContent: string
+  acceptedAt: number
+  filePath: string
+  /** Line range where content was inserted (for gutter positioning) */
+  startLine?: number
+  endLine?: number
+}
+
+/** Recently undone AI change (for redo) */
+export interface RecentAIUndo {
+  messageId: string
+  originalContent: string
+  newContent: string
+  undoneAt: number
+  filePath: string
+  startLine?: number
 }
 
 interface CodeEditorProps {
@@ -29,6 +56,14 @@ interface CodeEditorProps {
   aiBlocks?: AIBlock[]
   /** Callback when user clicks accept/reject on an inline AI block */
   onAIBlockAction?: (chatId: string, messageId: string, opIndex: number, action: "accept" | "reject") => void
+  /** Recently accepted AI operations (for quick-undo) */
+  recentAccepts?: RecentAIAccept[]
+  /** Callback to undo a recently accepted AI operation */
+  onQuickUndo?: (accept: RecentAIAccept) => void
+  /** Recently undone AI operations (for redo) */
+  recentUndos?: RecentAIUndo[]
+  /** Callback to redo an undone AI operation */
+  onQuickRedo?: (undo: RecentAIUndo) => void
 }
 
 // ─── Diff Utilities ──────────────────────────────────────────────────────
@@ -236,9 +271,153 @@ function DiffOverlay({
   )
 }
 
+// ─── AI Quick-Undo/Redo Gutter Icons ─────────────────────────────────────
+
+const QUICK_ACTION_DURATION_MS = 15000 // 15 seconds
+
+function AIQuickActionsGutter({
+  accepts,
+  undos,
+  onUndo,
+  onRedo,
+}: {
+  accepts: RecentAIAccept[]
+  undos: RecentAIUndo[]
+  onUndo: (accept: RecentAIAccept) => void
+  onRedo: (undo: RecentAIUndo) => void
+}) {
+  const [now, setNow] = useState(() => Date.now())
+
+  // Update "now" to trigger expiration
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(interval)
+  }, [])
+
+  // Filter to only show non-expired items
+  const visibleAccepts = accepts.filter(
+    (a) => now - a.acceptedAt < QUICK_ACTION_DURATION_MS
+  )
+  const visibleUndos = undos.filter(
+    (u) => now - u.undoneAt < QUICK_ACTION_DURATION_MS
+  )
+
+  if (visibleAccepts.length === 0 && visibleUndos.length === 0) return null
+
+  return (
+    <div className="absolute top-0 left-0 z-30 pointer-events-none">
+      <AnimatePresence>
+        {/* Undo buttons for recent accepts */}
+        {visibleAccepts.map((accept) => {
+          const elapsed = now - accept.acceptedAt
+          const remaining = QUICK_ACTION_DURATION_MS - elapsed
+          const opacity = Math.max(0.3, remaining / QUICK_ACTION_DURATION_MS)
+
+          return (
+            <motion.div
+              key={`undo-${accept.messageId}`}
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              transition={{ duration: 0.2 }}
+              className="pointer-events-auto"
+              style={{
+                position: "absolute",
+                top: ((accept.startLine ?? 1) - 1) * 20 + 12,
+                left: 8,
+              }}
+            >
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => onUndo(accept)}
+                    className="flex items-center justify-center w-5 h-5 rounded bg-ai/20 hover:bg-ai/40 border border-ai/30 transition-all hover:scale-110"
+                    style={{ opacity }}
+                  >
+                    <Undo2 className="h-3 w-3 text-ai" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="right" className="max-w-xs">
+                  <div className="space-y-1">
+                    <p className="font-medium text-text-primary">Undo AI Action</p>
+                    <p className="text-text-secondary text-xs">
+                      Revert this AI-generated change
+                    </p>
+                    <p className="text-text-tertiary text-[10px]">
+                      {Math.ceil(remaining / 1000)}s remaining
+                    </p>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
+            </motion.div>
+          )
+        })}
+
+        {/* Redo buttons for recent undos */}
+        {visibleUndos.map((undo) => {
+          const elapsed = now - undo.undoneAt
+          const remaining = QUICK_ACTION_DURATION_MS - elapsed
+          const opacity = Math.max(0.3, remaining / QUICK_ACTION_DURATION_MS)
+
+          return (
+            <motion.div
+              key={`redo-${undo.messageId}`}
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              transition={{ duration: 0.2 }}
+              className="pointer-events-auto"
+              style={{
+                position: "absolute",
+                top: ((undo.startLine ?? 1) - 1) * 20 + 12,
+                left: 36, // Offset from undo button
+              }}
+            >
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => onRedo(undo)}
+                    className="flex items-center justify-center w-5 h-5 rounded bg-brand/20 hover:bg-brand/40 border border-brand/30 transition-all hover:scale-110"
+                    style={{ opacity }}
+                  >
+                    <Redo2 className="h-3 w-3 text-brand" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="right" className="max-w-xs">
+                  <div className="space-y-1">
+                    <p className="font-medium text-text-primary">Redo AI Action</p>
+                    <p className="text-text-secondary text-xs">
+                      Restore the AI-generated change
+                    </p>
+                    <p className="text-text-tertiary text-[10px]">
+                      {Math.ceil(remaining / 1000)}s remaining
+                    </p>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
+            </motion.div>
+          )
+        })}
+      </AnimatePresence>
+    </div>
+  )
+}
+
 // ─── Code Editor ─────────────────────────────────────────────────────────
 
-export function CodeEditor({ file, readOnly = false, yText, awareness, onContentChange, aiBlocks, onAIBlockAction }: CodeEditorProps) {
+export function CodeEditor({
+  file,
+  readOnly = false,
+  yText,
+  awareness,
+  onContentChange,
+  aiBlocks,
+  onAIBlockAction,
+  recentAccepts = [],
+  onQuickUndo,
+  recentUndos = [],
+  onQuickRedo,
+}: CodeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [MonacoEditor, setMonacoEditor] = useState<typeof import("@monaco-editor/react").default | null>(null)
   /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -383,6 +562,16 @@ export function CodeEditor({ file, readOnly = false, yText, awareness, onContent
         }}
         onMount={handleEditorMount}
       />
+
+      {/* AI Quick-Undo/Redo Gutter Icons — show for recently accepted/undone AI changes */}
+      {(onQuickUndo || onQuickRedo) && (recentAccepts.length > 0 || recentUndos.length > 0) && (
+        <AIQuickActionsGutter
+          accepts={recentAccepts.filter((a) => a.filePath === file.path)}
+          undos={recentUndos.filter((u) => u.filePath === file.path)}
+          onUndo={onQuickUndo ?? (() => {})}
+          onRedo={onQuickRedo ?? (() => {})}
+        />
+      )}
 
       {/* AI Diff Overlay — renders on top of editor when there are pending changes */}
       {pendingBlock && (
