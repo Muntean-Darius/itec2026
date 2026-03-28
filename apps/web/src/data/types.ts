@@ -75,6 +75,9 @@ export interface TerminalLine {
   userId?: string
 }
 
+/** Snapshot kind for time-travel timeline visualization */
+export type SnapshotKind = "cron" | "ai" | "human"
+
 export interface Snapshot {
   id: string
   projectId: string
@@ -83,6 +86,14 @@ export interface Snapshot {
   /** Number of lines changed since previous snapshot */
   changeCount: number
   userId: string
+  /** Type of snapshot for visual distinction in timeline */
+  kind: SnapshotKind
+  /** For AI snapshots: summary of the AI action (e.g., "Refactored Auth Flow") */
+  promptSummary?: string
+  /** File path affected (for tooltips) */
+  filePath?: string
+  /** Serialized file state at this snapshot (for time-travel preview) */
+  fileStates?: Record<string, string>
 }
 
 // ─── AI Chat & Operations ────────────────────────────────────────────────

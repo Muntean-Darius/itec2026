@@ -1,10 +1,12 @@
 "use client"
 
 import { useRef, useEffect, useState, useCallback, useMemo } from "react"
-import { Check, X, Sparkles } from "lucide-react"
+import { motion, AnimatePresence } from "framer-motion"
+import { Check, X, Sparkles, Undo2, Redo2 } from "lucide-react"
 import type { FileNode, FileOperation } from "@/data/types"
 import { cn } from "@/lib/utils"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
 
 /** Pending AI operation on this file (from AI chat messages) */
 export interface AIBlock {
@@ -14,6 +16,31 @@ export interface AIBlock {
   operation: FileOperation
   status: "pending" | "accepted" | "rejected"
   agentColor?: string
+}
+
+/** Recently accepted AI block for quick-undo */
+export interface RecentAIAccept {
+  messageId: string
+  chatId: string
+  operationIndex: number
+  originalContent: string
+  /** The new content after AI change (for redo) */
+  newContent: string
+  acceptedAt: number
+  filePath: string
+  /** Line range where content was inserted (for gutter positioning) */
+  startLine?: number
+  endLine?: number
+}
+
+/** Recently undone AI change (for redo) */
+export interface RecentAIUndo {
+  messageId: string
+  originalContent: string
+  newContent: string
+  undoneAt: number
+  filePath: string
+  startLine?: number
 }
 
 interface CodeEditorProps {
@@ -29,6 +56,14 @@ interface CodeEditorProps {
   aiBlocks?: AIBlock[]
   /** Callback when user clicks accept/reject on an inline AI block */
   onAIBlockAction?: (chatId: string, messageId: string, opIndex: number, action: "accept" | "reject") => void
+  /** Recently accepted AI operations (for quick-undo) */
+  recentAccepts?: RecentAIAccept[]
+  /** Callback to undo a recently accepted AI operation */
+  onQuickUndo?: (accept: RecentAIAccept) => void
+  /** Recently undone AI operations (for redo) */
+  recentUndos?: RecentAIUndo[]
+  /** Callback to redo an undone AI operation */
+  onQuickRedo?: (undo: RecentAIUndo) => void
 }
 
 // ─── Diff Utilities ──────────────────────────────────────────────────────
@@ -236,18 +271,175 @@ function DiffOverlay({
   )
 }
 
+// ─── AI Quick-Undo/Redo Gutter Icons ─────────────────────────────────────
+
+const QUICK_ACTION_DURATION_MS = 15000 // 15 seconds
+
+function AIQuickActionsGutter({
+  accepts,
+  undos,
+  onUndo,
+  onRedo,
+}: {
+  accepts: RecentAIAccept[]
+  undos: RecentAIUndo[]
+  onUndo: (accept: RecentAIAccept) => void
+  onRedo: (undo: RecentAIUndo) => void
+}) {
+  const [now, setNow] = useState(() => Date.now())
+
+  // Update "now" to trigger expiration
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(interval)
+  }, [])
+
+  // Filter to only show non-expired items
+  const visibleAccepts = accepts.filter(
+    (a) => now - a.acceptedAt < QUICK_ACTION_DURATION_MS
+  )
+  const visibleUndos = undos.filter(
+    (u) => now - u.undoneAt < QUICK_ACTION_DURATION_MS
+  )
+
+  if (visibleAccepts.length === 0 && visibleUndos.length === 0) return null
+
+  return (
+    <div className="absolute top-0 left-0 z-30 pointer-events-none">
+      <AnimatePresence>
+        {/* Undo buttons for recent accepts */}
+        {visibleAccepts.map((accept) => {
+          const elapsed = now - accept.acceptedAt
+          const remaining = QUICK_ACTION_DURATION_MS - elapsed
+          const opacity = Math.max(0.3, remaining / QUICK_ACTION_DURATION_MS)
+
+          return (
+            <motion.div
+              key={`undo-${accept.messageId}`}
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              transition={{ duration: 0.2 }}
+              className="pointer-events-auto"
+              style={{
+                position: "absolute",
+                top: ((accept.startLine ?? 1) - 1) * 20 + 12,
+                left: 8,
+              }}
+            >
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => onUndo(accept)}
+                    className="flex items-center justify-center w-5 h-5 rounded bg-ai/20 hover:bg-ai/40 border border-ai/30 transition-all hover:scale-110"
+                    style={{ opacity }}
+                  >
+                    <Undo2 className="h-3 w-3 text-ai" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="right" className="max-w-xs">
+                  <div className="space-y-1">
+                    <p className="font-medium text-text-primary">Undo AI Action</p>
+                    <p className="text-text-secondary text-xs">
+                      Revert this AI-generated change
+                    </p>
+                    <p className="text-text-tertiary text-[10px]">
+                      {Math.ceil(remaining / 1000)}s remaining
+                    </p>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
+            </motion.div>
+          )
+        })}
+
+        {/* Redo buttons for recent undos */}
+        {visibleUndos.map((undo) => {
+          const elapsed = now - undo.undoneAt
+          const remaining = QUICK_ACTION_DURATION_MS - elapsed
+          const opacity = Math.max(0.3, remaining / QUICK_ACTION_DURATION_MS)
+
+          return (
+            <motion.div
+              key={`redo-${undo.messageId}`}
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              transition={{ duration: 0.2 }}
+              className="pointer-events-auto"
+              style={{
+                position: "absolute",
+                top: ((undo.startLine ?? 1) - 1) * 20 + 12,
+                left: 36, // Offset from undo button
+              }}
+            >
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => onRedo(undo)}
+                    className="flex items-center justify-center w-5 h-5 rounded bg-brand/20 hover:bg-brand/40 border border-brand/30 transition-all hover:scale-110"
+                    style={{ opacity }}
+                  >
+                    <Redo2 className="h-3 w-3 text-brand" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="right" className="max-w-xs">
+                  <div className="space-y-1">
+                    <p className="font-medium text-text-primary">Redo AI Action</p>
+                    <p className="text-text-secondary text-xs">
+                      Restore the AI-generated change
+                    </p>
+                    <p className="text-text-tertiary text-[10px]">
+                      {Math.ceil(remaining / 1000)}s remaining
+                    </p>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
+            </motion.div>
+          )
+        })}
+      </AnimatePresence>
+    </div>
+  )
+}
+
 // ─── Code Editor ─────────────────────────────────────────────────────────
 
-export function CodeEditor({ file, readOnly = false, yText, awareness, onContentChange, aiBlocks, onAIBlockAction }: CodeEditorProps) {
+// ─── Remote Cursor Overlay ──────────────────────────────────────────────
+
+interface RemoteCursor {
+  clientId: number
+  name: string
+  color: string
+  top: number
+  left: number
+  height: number
+}
+
+export function CodeEditor({
+  file,
+  readOnly = false,
+  yText,
+  awareness,
+  onContentChange,
+  aiBlocks,
+  onAIBlockAction,
+  recentAccepts = [],
+  onQuickUndo,
+  recentUndos = [],
+  onQuickRedo,
+}: CodeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [MonacoEditor, setMonacoEditor] = useState<typeof import("@monaco-editor/react").default | null>(null)
   /* eslint-disable @typescript-eslint/no-explicit-any */
   const bindingRef = useRef<any>(null)
   const editorRef = useRef<any>(null)
+  const yjsModuleRef = useRef<any>(null)
   /* eslint-enable @typescript-eslint/no-explicit-any */
+  const [remoteCursors, setRemoteCursors] = useState<RemoteCursor[]>([])
+  const [editorReady, setEditorReady] = useState(false)
 
   useEffect(() => {
-    // Dynamic import to avoid SSR issues
     import("@monaco-editor/react").then((mod) => {
       setMonacoEditor(() => mod.default)
     })
@@ -261,6 +453,120 @@ export function CodeEditor({ file, readOnly = false, yText, awareness, onContent
     }
   }, [])
 
+  // ── React-based cursor overlay ──
+  // Reads awareness selections, converts to pixel positions via Monaco API,
+  // and renders as positioned divs. Fully independent of Monaco's decoration
+  // rendering pipeline — always visible regardless of editor focus state.
+  useEffect(() => {
+    if (!awareness || !yText || !editorReady) return
+    const aw = awareness as any
+    const yt = yText as any
+
+    let Y: any = yjsModuleRef.current
+    let disposed = false
+    const disposables: Array<{ dispose(): void }> = []
+    let rafId: number | undefined
+
+    const computeCursors = () => {
+      const editor = editorRef.current
+      if (!editor || !Y || disposed) return
+      const model = editor.getModel()
+      const doc = yt.doc
+      if (!model || !doc) return
+
+      const localClientId = doc.clientID
+      const states = aw.getStates() as Map<number, Record<string, unknown>>
+      const cursors: RemoteCursor[] = []
+
+      states.forEach((state: Record<string, unknown>, clientId: number) => {
+        if (clientId === localClientId) return
+
+        const name = (state.name as string) || "User"
+        const color = (state.color as string) || "hsl(172, 66%, 50%)"
+
+        // Try y-monaco selection first (user has clicked in the editor)
+        const sel = state.selection as { anchor?: unknown; head?: unknown } | undefined
+        if (sel?.head) {
+          const headAbs = Y.createAbsolutePositionFromRelativePosition(sel.head, doc)
+          if (headAbs && headAbs.type === yt) {
+            const pos = model.getPositionAt(headAbs.index)
+            const pixelPos = editor.getScrolledVisiblePosition(pos)
+            if (pixelPos) {
+              cursors.push({ clientId, name, color, top: pixelPos.top, left: pixelPos.left, height: pixelPos.height })
+            }
+          }
+          // User has a selection — don't fall through to line-1 fallback.
+          // If we can't resolve yet (doc still syncing), skip for now;
+          // onDidChangeModelContent will re-trigger once content arrives.
+          return
+        }
+
+        // No selection at all — user is viewing this file but hasn't clicked
+        const userState = state.user as { activeFile?: string } | undefined
+        if (userState?.activeFile === file.path) {
+          const pixelPos = editor.getScrolledVisiblePosition({ lineNumber: 1, column: 1 })
+          if (pixelPos) {
+            cursors.push({ clientId, name, color, top: pixelPos.top, left: pixelPos.left, height: pixelPos.height })
+          }
+        }
+      })
+
+      setRemoteCursors(cursors)
+    }
+
+    // Load Yjs module then wire up listeners
+    const init = async () => {
+      if (!Y) {
+        Y = await import("yjs")
+        yjsModuleRef.current = Y
+      }
+      if (disposed) return
+
+      aw.on("change", computeCursors)
+
+      // Clear stale selection from a previously viewed file
+      aw.setLocalStateField("selection", null)
+
+      // Recompute on scroll, layout, or content change (pixel positions shift,
+      // and content changes mean the doc synced so relative positions can resolve)
+      const editor = editorRef.current
+      if (editor) {
+        disposables.push(editor.onDidScrollChange(computeCursors))
+        disposables.push(editor.onDidLayoutChange(computeCursors))
+        disposables.push(editor.onDidChangeModelContent(computeCursors))
+
+        // Broadcast local cursor position via awareness (replaces y-monaco's
+        // built-in broadcasting which we disabled to prevent duplicate cursors)
+        disposables.push(editor.onDidChangeCursorSelection(() => {
+          if (disposed) return
+          const model = editor.getModel()
+          if (!model) return
+          const sel = editor.getSelection()
+          if (sel) {
+            const anchor = Y.createRelativePositionFromTypeIndex(yt, model.getOffsetAt(sel.getStartPosition()))
+            const head = Y.createRelativePositionFromTypeIndex(yt, model.getOffsetAt(sel.getEndPosition()))
+            aw.setLocalStateField("selection", { anchor, head })
+          }
+        }))
+      }
+
+      computeCursors()
+
+      // Second pass after Monaco layout settles
+      rafId = requestAnimationFrame(() => {
+        if (!disposed) computeCursors()
+      })
+    }
+    init()
+
+    return () => {
+      disposed = true
+      aw.off("change", computeCursors)
+      disposables.forEach((d) => d.dispose())
+      if (rafId !== undefined) cancelAnimationFrame(rafId)
+    }
+  }, [awareness, yText, editorReady])
+
   // Find the first pending AI block for this file
   const pendingBlock = aiBlocks?.find((b) => b.status === "pending")
 
@@ -268,24 +574,26 @@ export function CodeEditor({ file, readOnly = false, yText, awareness, onContent
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (editor: any) => {
       editorRef.current = editor
+      setEditorReady(true)
 
-      // If we have a Y.Text, create a y-monaco binding for real-time CRDT sync
-      if (yText && awareness) {
+      // If we have a Y.Text, create a y-monaco binding for CRDT text sync only.
+      // We do NOT pass awareness here — y-monaco would render its own cursor
+      // decorations which duplicate our custom React overlay. Cursor broadcasting
+      // is handled manually in the cursor useEffect below.
+      if (yText) {
         import("y-monaco").then(({ MonacoBinding }) => {
           if (!editor.getModel()) return
           bindingRef.current = new MonacoBinding(
-            yText as any, // Y.Text
+            yText as any,
             editor.getModel()!,
-            new Set([editor]),
-            awareness as any // Awareness
+            new Set([editor])
           )
         }).catch(() => {
-          // Fallback: if y-monaco fails, use the value prop approach
           console.warn("[iTECify] y-monaco binding failed, using fallback")
         })
       }
     },
-    [yText, awareness]
+    [yText]
   )
 
   if (!MonacoEditor) {
@@ -384,6 +692,16 @@ export function CodeEditor({ file, readOnly = false, yText, awareness, onContent
         onMount={handleEditorMount}
       />
 
+      {/* AI Quick-Undo/Redo Gutter Icons — show for recently accepted/undone AI changes */}
+      {(onQuickUndo || onQuickRedo) && (recentAccepts.length > 0 || recentUndos.length > 0) && (
+        <AIQuickActionsGutter
+          accepts={recentAccepts.filter((a) => a.filePath === file.path)}
+          undos={recentUndos.filter((u) => u.filePath === file.path)}
+          onUndo={onQuickUndo ?? (() => {})}
+          onRedo={onQuickRedo ?? (() => {})}
+        />
+      )}
+
       {/* AI Diff Overlay — renders on top of editor when there are pending changes */}
       {pendingBlock && (
         <DiffOverlay
@@ -394,6 +712,35 @@ export function CodeEditor({ file, readOnly = false, yText, awareness, onContent
           }
         />
       )}
+
+      {/* Remote cursor overlays — always visible regardless of editor focus */}
+      {remoteCursors.map((cursor) => (
+        <div
+          key={cursor.clientId}
+          className="pointer-events-none absolute z-20"
+          style={{
+            top: cursor.top,
+            left: cursor.left,
+            transition: "top 120ms ease-out, left 120ms ease-out",
+          }}
+        >
+          {/* Cursor line */}
+          <div
+            style={{
+              width: 2,
+              height: cursor.height,
+              backgroundColor: cursor.color,
+            }}
+          />
+          {/* Name label */}
+          <div
+            className="absolute -top-4 left-0 whitespace-nowrap rounded px-1 py-0.5 text-[10px] font-medium leading-none text-white"
+            style={{ backgroundColor: cursor.color }}
+          >
+            {cursor.name}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }

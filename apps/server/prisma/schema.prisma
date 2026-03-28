@@ -12,15 +12,32 @@ datasource db {
   provider = "postgresql"
 }
 
+enum SnapshotKind {
+  cron   // Auto-saved every 60s
+  ai     // AI-generated checkpoint
+  human  // Manual save (Cmd+S)
+}
+
 model Snapshot {
-  id          String   @id @default(uuid()) @db.Uuid
+  id          String       @id @default(uuid()) @db.Uuid
   label       String?
-  changeCount Int      @default(0) @map("change_count")
+  kind        SnapshotKind @default(cron)
+  changeCount Int          @default(0) @map("change_count")
   blob        Bytes
-  createdAt   DateTime @default(now()) @map("created_at")
-  projectId   String   @map("project_id") @db.Uuid
-  userId      String   @map("user_id") @db.Uuid
+  createdAt   DateTime     @default(now()) @map("created_at")
+  projectId   String       @map("project_id") @db.Uuid
+  userId      String       @map("user_id") @db.Uuid
+
+  // For AI snapshots: summary of what the AI did
+  promptSummary String? @map("prompt_summary")
+  
+  // For tracking which file was primarily affected
+  filePath String? @map("file_path")
+  
+  // JSON blob of file states at this snapshot (for file tree sync)
+  fileStates Json? @map("file_states")
 
   @@index([projectId, createdAt])
+  @@index([projectId, kind])
   @@map("snapshots")
 }

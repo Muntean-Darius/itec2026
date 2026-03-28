@@ -159,17 +159,26 @@ export async function getSnapshots(projectId: string): Promise<Snapshot[]> {
       label: true,
       changeCount: true,
       userId: true,
+      kind: true,
+      promptSummary: true,
+      filePath: true,
+      fileStates: true,
     },
   })
 
-  return snapshots.map((s: any) => ({
+  const parsedSnapshots = snapshots.map((s: any) => ({
     id: s.id,
     projectId: s.projectId,
     createdAt: s.createdAt.toISOString(),
     label: s.label,
     changeCount: s.changeCount,
     userId: s.userId,
+    kind: (s.kind as "cron" | "ai" | "human") ?? "cron",
+    promptSummary: s.promptSummary,
+    filePath: s.filePath,
+    fileStates: s.fileStates,
   }))
+  return parsedSnapshots
 }
 
 // ─── Files (initial load from latest snapshot or empty) ──────────────────
