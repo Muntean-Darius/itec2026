@@ -47,6 +47,7 @@ export interface UseCollaborationReturn {
   getYText: (path: string) => unknown | null
   getYdoc: () => unknown | null
   getAwareness: () => unknown | null
+  getTerminalInputYText: (sessionId: string) => unknown | null
   createFile: (path: string, content?: string) => void
   deleteFile: (path: string) => void
   renameFile: (oldPath: string, newPath: string) => void
@@ -146,6 +147,7 @@ export function useCollaboration({
           isOnline: true,
           terminalSessionId: u.terminalSessionId as string | undefined,
           terminalDraft: u.terminalDraft as string | undefined,
+          terminalCursorPos: u.terminalCursorPos as number | undefined,
         })
       }
     })
@@ -246,6 +248,7 @@ export function useCollaboration({
           email: currentUser.email,
           cursorColor: currentUser.cursorColor,
           avatarUrl: currentUser.avatarUrl,
+          clientId: doc.clientID,
         })
       })
 
@@ -346,19 +349,21 @@ export function useCollaboration({
         syncTerminalFromDoc()
       })
 
-      // Set awareness
+      // Set awareness — name and color MUST be at top level for y-monaco cursor rendering
       awareness.setLocalStateField("user", {
         userId: currentUser.id,
         name: currentUser.name,
         email: currentUser.email,
         cursorColor: currentUser.cursorColor,
-        color: currentUser.cursorColor,
         avatarUrl: currentUser.avatarUrl,
         activeFile: null,
         cursorPosition: null,
         isTyping: false,
         isOnline: true,
       })
+      // Top-level fields for y-monaco (reads state.name, state.color directly)
+      awareness.setLocalStateField("name", currentUser.name)
+      awareness.setLocalStateField("color", currentUser.cursorColor)
 
       cleanupFn = () => {
         doc.off("update", onDocUpdate)
@@ -398,6 +403,25 @@ export function useCollaboration({
     const ytext = filesMap.get(path)
     if (ytext instanceof Y.Text) return ytext
     return null
+  }, [])
+
+  const getTerminalInputYText = useCallback((sessionId: string): unknown | null => {
+    const Y = yjsRef.current
+    const doc = ydocRef.current
+    if (!Y || !doc) return null
+    const terminalsMap = doc.getMap("terminals")
+    const sessionMap = terminalsMap.get(sessionId)
+    if (!sessionMap || !(sessionMap instanceof Y.Map)) return null
+    let inputText = sessionMap.get("input")
+    if (!(inputText instanceof Y.Text)) {
+      // Create the shared input Y.Text if it doesn't exist yet
+      doc.transact(() => {
+        const yt = new Y.Text()
+        ;(sessionMap as InstanceType<typeof Y.Map>).set("input", yt)
+        inputText = yt
+      })
+    }
+    return inputText
   }, [])
 
   const createFile = useCallback((path: string, content = "") => {
@@ -457,6 +481,10 @@ export function useCollaboration({
     if (!awareness) return
     const current = awareness.getLocalState()?.user || {}
     awareness.setLocalStateField("user", { ...current, ...state })
+    // Keep top-level isOnline sync'd for y-monaco
+    if (state.isTyping !== undefined) {
+      // Trigger an awareness update so remote users see changes
+    }
   }, [])
 
   const updateMeta = useCallback((key: string, value: string) => {
@@ -518,5 +546,6 @@ export function useCollaboration({
     createTerminalSession,
     deleteTerminalSession,
     sendTerminalInput,
+    getTerminalInputYText,
   }
 }

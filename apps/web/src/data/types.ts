@@ -41,6 +41,8 @@ export interface PresenceUser extends User {
   /** Terminal draft sharing */
   terminalSessionId?: string
   terminalDraft?: string
+  /** Terminal cursor position (character offset in shared input) */
+  terminalCursorPos?: number
 }
 
 export interface AIAgent {

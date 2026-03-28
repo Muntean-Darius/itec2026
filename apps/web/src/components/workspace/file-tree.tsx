@@ -24,6 +24,16 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogFooter,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from "@/components/ui/alert-dialog"
 import { cn } from "@/lib/utils"
 
 interface FileTreeProps {
@@ -111,32 +121,37 @@ function FileContextMenu({
     switch (label) {
       case "Copy Path":
         navigator.clipboard?.writeText(state.path)
+        onClose()
         break
       case "Delete":
-        if (onDelete && confirm(`Delete ${state.path}?`)) {
-          onDelete(state.path)
-        }
+        // Don't close - the caller will show a dialog
+        onDelete?.(state.path)
+        onClose()
         break
       case "Rename":
         onRename?.(state.path)
+        onClose()
         break
       case "Duplicate":
         onDuplicate?.(state.path)
+        onClose()
         break
       case "New File":
         onNewFileInFolder?.(state.path)
+        onClose()
         break
       case "New Folder": {
         const folderName = prompt("Folder name:")
         if (folderName?.trim()) {
           const folderPath = `${state.path}/${folderName.trim()}`
-          // Create a .gitkeep to materialize the folder
           onNewFileInFolder?.(folderPath)
         }
+        onClose()
         break
       }
+      default:
+        onClose()
     }
-    onClose()
   }
 
   return (
@@ -228,16 +243,22 @@ function buildTree(files: FileNode[]): TreeNode[] {
   return root.children
 }
 
-function getFileIcon(name: string) {
+export function getFileIcon(name: string, size = "h-4 w-4") {
   if (name.endsWith(".tsx") || name.endsWith(".ts"))
-    return <FileCode2 className="h-4 w-4 text-blue-400" />
+    return <FileCode2 className={`${size} text-blue-400`} />
   if (name.endsWith(".json"))
-    return <FileJson className="h-4 w-4 text-yellow-400" />
+    return <FileJson className={`${size} text-yellow-400`} />
   if (name.endsWith(".md"))
-    return <FileText className="h-4 w-4 text-text-secondary" />
+    return <FileText className={`${size} text-text-secondary`} />
   if (name.endsWith(".css"))
-    return <FileCode2 className="h-4 w-4 text-purple-400" />
-  return <File className="h-4 w-4 text-text-tertiary" />
+    return <FileCode2 className={`${size} text-purple-400`} />
+  if (name.endsWith(".js") || name.endsWith(".jsx"))
+    return <FileCode2 className={`${size} text-yellow-300`} />
+  if (name.endsWith(".html"))
+    return <FileCode2 className={`${size} text-orange-400`} />
+  if (name.endsWith(".py"))
+    return <FileCode2 className={`${size} text-green-400`} />
+  return <File className={`${size} text-text-tertiary`} />
 }
 
 export function FileTree({
@@ -256,6 +277,7 @@ export function FileTree({
   )
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [renamingPath, setRenamingPath] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
 
   const tree = useMemo(() => buildTree(files), [files])
 
@@ -352,7 +374,15 @@ export function FileTree({
       </div>
 
       {/* Tree */}
-      <ScrollArea className="flex-1 px-1">
+      <ScrollArea
+        className="flex-1 px-1"
+        onContextMenu={(e) => {
+          // Right-click on empty space → create file at root
+          if ((e.target as HTMLElement).closest("button")) return
+          e.preventDefault()
+          setContextMenu({ x: e.clientX, y: e.clientY, path: "/", isDir: true })
+        }}
+      >
         <div className="py-1">
           {filteredFiles
             ? filteredFiles.map((file) => (
@@ -389,13 +419,39 @@ export function FileTree({
           <FileContextMenu
             state={contextMenu}
             onClose={() => setContextMenu(null)}
-            onDelete={onDeleteFile}
+            onDelete={(path) => setDeleteTarget(path)}
             onRename={handleRename}
             onDuplicate={handleDuplicate}
             onNewFileInFolder={handleNewFileInFolder}
           />
         )}
       </AnimatePresence>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete file</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete{" "}
+              <span className="font-mono text-text-primary">{deleteTarget}</span>?
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-error text-white hover:bg-error/90"
+              onClick={() => {
+                if (deleteTarget) onDeleteFile?.(deleteTarget)
+                setDeleteTarget(null)
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

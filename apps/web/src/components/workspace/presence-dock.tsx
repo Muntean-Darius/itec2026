@@ -1,12 +1,21 @@
 "use client"
 
 import { motion } from "framer-motion"
-import { Bot, Sparkles } from "lucide-react"
+import { Bot, Sparkles, Settings, LogOut, LayoutDashboard } from "lucide-react"
+import Link from "next/link"
 import type { User, PresenceUser } from "@/data/types"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
+import { signOut } from "@/app/actions"
 
 function getInitials(name: string) {
   return name
@@ -109,22 +118,48 @@ export function PresenceDock({
         ))}
       </div>
 
-      {/* Current user */}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Avatar className="h-7 w-7 ring-2 ring-brand/30">
-            <AvatarFallback
-              className="text-[10px] font-medium text-white"
-              style={{ backgroundColor: currentUser.cursorColor }}
-            >
-              {getInitials(currentUser.name)}
-            </AvatarFallback>
-          </Avatar>
-        </TooltipTrigger>
-        <TooltipContent>
-          <p className="font-medium text-xs">{currentUser.name} (you)</p>
-        </TooltipContent>
-      </Tooltip>
+      {/* Current user — dropdown menu with settings/sign-out */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-brand">
+            <Avatar className="h-7 w-7 ring-2 ring-brand/30 cursor-pointer">
+              <AvatarFallback
+                className="text-[10px] font-medium text-white"
+                style={{ backgroundColor: currentUser.cursorColor }}
+              >
+                {getInitials(currentUser.name)}
+              </AvatarFallback>
+            </Avatar>
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" sideOffset={8} className="w-48">
+          <div className="px-2 py-1.5">
+            <p className="text-sm font-medium text-text-primary">{currentUser.name}</p>
+            <p className="text-xs text-text-tertiary">{currentUser.email}</p>
+          </div>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem asChild>
+            <Link href="/dashboard" className="flex items-center gap-2 cursor-pointer">
+              <LayoutDashboard className="h-4 w-4" />
+              Dashboard
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <Link href="/dashboard?tab=settings" className="flex items-center gap-2 cursor-pointer">
+              <Settings className="h-4 w-4" />
+              Settings
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            className="flex items-center gap-2 text-error focus:text-error cursor-pointer"
+            onClick={() => signOut()}
+          >
+            <LogOut className="h-4 w-4" />
+            Sign out
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   )
 }

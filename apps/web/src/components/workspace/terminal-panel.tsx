@@ -7,14 +7,6 @@ import { cn } from "@/lib/utils"
 import type { TerminalLine, PresenceUser } from "@/data/types"
 import type { TerminalSession } from "@/lib/collaboration"
 
-interface TerminalDraft {
-  userId: string
-  name: string
-  cursorColor: string
-  sessionId: string
-  text: string
-}
-
 interface TerminalPanelProps {
   isRunning: boolean
   sessions: TerminalSession[]
@@ -23,10 +15,14 @@ interface TerminalPanelProps {
   onCreateSession: () => void
   onDeleteSession: (id: string) => void
   onInput?: (content: string) => void
-  /** Other users' draft terminal input (from awareness) */
-  terminalDrafts?: TerminalDraft[]
-  /** Called when user types in terminal (for awareness sharing) */
-  onDraftChange?: (sessionId: string, text: string) => void
+  /** Y.Text for the shared terminal input (from collab hook) */
+  inputYText?: unknown
+  /** Awareness instance for collaborative cursor in terminal */
+  awareness?: unknown
+  /** Other users in the workspace (for terminal cursors) */
+  presenceUsers?: PresenceUser[]
+  /** Current user's ID */
+  currentUserId?: string
 }
 
 export function TerminalPanel({
@@ -37,28 +33,69 @@ export function TerminalPanel({
   onCreateSession,
   onDeleteSession,
   onInput,
-  terminalDrafts = [],
-  onDraftChange,
+  inputYText,
+  awareness,
+  presenceUsers = [],
+  currentUserId,
 }: TerminalPanelProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-  // Per-session input state to prevent leaking between tabs
-  const [inputPerSession, setInputPerSession] = useState<Record<string, string>>({})
+  const [inputValue, setInputValue] = useState("")
+  const suppressYTextSync = useRef(false)
+  // Track which terminal session the user last viewed & line count for highlights
+  const [lastSeenLines, setLastSeenLines] = useState<Record<string, number>>({})
+  // Track unread counts for badge
+  const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({})
 
   const activeSession = sessions.find((s) => s.id === activeSessionId)
   const lines: TerminalLine[] = activeSession?.lines ?? []
-  const inputValue = (activeSessionId ? inputPerSession[activeSessionId] : "") ?? ""
 
-  const setInputValue = useCallback((value: string) => {
-    if (!activeSessionId) return
-    setInputPerSession(prev => ({ ...prev, [activeSessionId]: value }))
-    onDraftChange?.(activeSessionId, value)
-  }, [activeSessionId, onDraftChange])
+  // Mark current session as read when viewing
+  useEffect(() => {
+    if (activeSessionId && activeSession) {
+      setLastSeenLines((prev) => ({ ...prev, [activeSessionId]: activeSession.lines.length }))
+      setUnreadCounts((prev) => ({ ...prev, [activeSessionId]: 0 }))
+    }
+  }, [activeSessionId, activeSession])
 
-  // Auto-focus input when switching sessions or when created
+  // Track unread lines for inactive sessions
+  useEffect(() => {
+    for (const session of sessions) {
+      if (session.id === activeSessionId) continue
+      const lastSeen = lastSeenLines[session.id] ?? 0
+      const newCount = Math.max(0, session.lines.length - lastSeen)
+      if (newCount > 0) {
+        setUnreadCounts((prev) => ({
+          ...prev,
+          [session.id]: newCount,
+        }))
+      }
+    }
+  }, [sessions, activeSessionId, lastSeenLines])
+
+  // Compute which lines are "new" in the current active session
+  const currentLastSeen = activeSessionId ? (lastSeenLines[activeSessionId] ?? lines.length) : lines.length
+  const newLinesStartIdx = currentLastSeen
+
+  // ── Y.Text sync for shared terminal input ──
+  useEffect(() => {
+    if (!inputYText) return
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const yt = inputYText as any
+    // Sync initial value
+    setInputValue(yt.toString())
+
+    const observer = () => {
+      if (suppressYTextSync.current) return
+      setInputValue(yt.toString())
+    }
+    yt.observe(observer)
+    return () => yt.unobserve(observer)
+  }, [inputYText])
+
+  // Auto-focus input when switching sessions
   useEffect(() => {
     if (activeSessionId) {
-      // Small delay to let React render the new session
       const timer = setTimeout(() => inputRef.current?.focus(), 50)
       return () => clearTimeout(timer)
     }
@@ -68,16 +105,80 @@ export function TerminalPanel({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [lines, isRunning])
 
-  const handleSubmit = useCallback(() => {
-    if (!inputValue.trim()) return
-    onInput?.(inputValue.trim())
-    setInputValue("")
-  }, [inputValue, onInput, setInputValue])
+  const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const newValue = e.target.value
+    const cursorPos = e.target.selectionStart ?? newValue.length
+    setInputValue(newValue)
 
-  // Other users' drafts for the active terminal session
-  const activeDrafts = terminalDrafts.filter(
-    (d) => d.sessionId === activeSessionId && d.text.length > 0
-  )
+    // Sync to Y.Text for collaborative editing
+    if (inputYText) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const yt = inputYText as any
+      suppressYTextSync.current = true
+      // Simple diff: replace entire content. For more granular edits we'd compute a diff,
+      // but Y.Text handles concurrent edits correctly regardless.
+      const current = yt.toString()
+      if (current !== newValue) {
+        yt.doc.transact(() => {
+          if (yt.length > 0) yt.delete(0, yt.length)
+          if (newValue) yt.insert(0, newValue)
+        })
+      }
+      suppressYTextSync.current = false
+    }
+
+    // Update terminal cursor position in awareness
+    if (awareness && activeSessionId) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const aw = awareness as any
+      const current = aw.getLocalState()?.user || {}
+      aw.setLocalStateField("user", {
+        ...current,
+        terminalSessionId: activeSessionId,
+        terminalCursorPos: cursorPos,
+      })
+    }
+  }, [inputYText, awareness, activeSessionId])
+
+  const handleInputKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" && inputValue.trim()) {
+      onInput?.(inputValue.trim())
+      setInputValue("")
+      // Clear Y.Text
+      if (inputYText) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const yt = inputYText as any
+        suppressYTextSync.current = true
+        if (yt.length > 0) {
+          yt.doc.transact(() => { yt.delete(0, yt.length) })
+        }
+        suppressYTextSync.current = false
+      }
+    }
+  }, [inputValue, onInput, inputYText])
+
+  const handleInputClick = useCallback(() => {
+    if (awareness && activeSessionId && inputRef.current) {
+      const cursorPos = inputRef.current.selectionStart ?? 0
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const aw = awareness as any
+      const current = aw.getLocalState()?.user || {}
+      aw.setLocalStateField("user", {
+        ...current,
+        terminalSessionId: activeSessionId,
+        terminalCursorPos: cursorPos,
+      })
+    }
+  }, [awareness, activeSessionId])
+
+  // Get other users' terminal cursor positions for this session
+  const otherTerminalCursors = presenceUsers
+    .filter((p) => {
+      const userId = p.id.split(":")[0]
+      return userId !== currentUserId &&
+        p.terminalSessionId === activeSessionId &&
+        p.isOnline
+    })
 
   return (
     <div className="flex h-full flex-col bg-terminal-bg">
@@ -86,6 +187,7 @@ export function TerminalPanel({
         <div className="flex flex-1 items-center gap-0.5 overflow-x-auto">
           {sessions.map((session) => {
             const isActive = session.id === activeSessionId
+            const unread = unreadCounts[session.id] ?? 0
             return (
               <div
                 key={session.id}
@@ -95,7 +197,7 @@ export function TerminalPanel({
                 onClick={() => onSelectSession(session.id)}
                 onKeyDown={(e) => { if (e.key === "Enter") onSelectSession(session.id) }}
                 className={cn(
-                  "group flex cursor-pointer items-center gap-1 rounded-md px-2 py-0.5 text-xs transition-colors",
+                  "group relative flex cursor-pointer items-center gap-1 rounded-md px-2 py-0.5 text-xs transition-colors",
                   isActive
                     ? "bg-elevated text-text-primary"
                     : "text-text-tertiary hover:bg-hover hover:text-text-secondary"
@@ -103,6 +205,11 @@ export function TerminalPanel({
               >
                 <TermIcon className="h-3 w-3" />
                 <span className="truncate max-w-[90px]">{session.name}</span>
+                {unread > 0 && !isActive && (
+                  <span className="ml-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand px-1 text-[9px] font-medium text-white">
+                    {unread}
+                  </span>
+                )}
                 {sessions.length > 1 && (
                   <button
                     onClick={(e) => {
@@ -118,7 +225,6 @@ export function TerminalPanel({
             )
           })}
 
-          {/* Create new session button */}
           <button
             onClick={onCreateSession}
             className="flex items-center justify-center rounded-md p-1 text-text-tertiary transition-colors hover:bg-hover hover:text-text-secondary"
@@ -146,22 +252,26 @@ export function TerminalPanel({
           onClick={() => inputRef.current?.focus()}
         >
           <div className="p-3 leading-relaxed">
-            {lines.map((line) => (
-              <div
-                key={line.id}
-                className={cn(
-                  "whitespace-pre-wrap",
-                  line.type === "stdin" && "text-brand",
-                  line.type === "stdout" && "text-text-primary",
-                  line.type === "stderr" && "text-error"
-                )}
-              >
-                {line.type === "stdin" && (
-                  <span className="text-text-tertiary">$ </span>
-                )}
-                {line.content}
-              </div>
-            ))}
+            {lines.map((line, idx) => {
+              const isNew = idx >= newLinesStartIdx
+              return (
+                <div
+                  key={line.id}
+                  className={cn(
+                    "whitespace-pre-wrap",
+                    line.type === "stdin" && "text-brand",
+                    line.type === "stdout" && "text-text-primary",
+                    line.type === "stderr" && "text-error",
+                    isNew && "border-l-2 border-brand/40 pl-2 bg-brand/5 -ml-2 rounded-r-sm"
+                  )}
+                >
+                  {line.type === "stdin" && (
+                    <span className="text-text-tertiary">$ </span>
+                  )}
+                  {line.content}
+                </div>
+              )
+            })}
 
             {isRunning && (
               <div className="mt-1 flex items-center gap-2">
@@ -171,40 +281,49 @@ export function TerminalPanel({
               </div>
             )}
 
-            {/* Other users' draft input */}
-            {activeDrafts.map((draft) => (
-              <div key={draft.userId} className="flex items-center gap-1 opacity-50">
-                <span
-                  className="text-[10px]"
-                  style={{ color: draft.cursorColor }}
-                >
-                  {draft.name}:
-                </span>
-                <span className="text-text-tertiary">$ </span>
-                <span
-                  className="text-text-secondary"
-                  style={{ borderLeft: `2px solid ${draft.cursorColor}`, paddingLeft: 2 }}
-                >
-                  {draft.text}
-                </span>
-              </div>
-            ))}
-
             {!isRunning && (
-              <div className="flex items-center gap-1">
-                <span className="text-text-tertiary">~/itecify $&nbsp;</span>
-                <input
-                  ref={inputRef}
-                  value={inputValue}
-                  onChange={(e) => setInputValue(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleSubmit()
-                  }}
-                  className="flex-1 bg-transparent text-text-primary outline-none font-mono text-xs caret-brand"
-                  spellCheck={false}
-                  autoComplete="off"
-                  autoFocus
-                />
+              <div className="relative">
+                <div className="flex items-center gap-1">
+                  <span className="text-text-tertiary">~/itecify $&nbsp;</span>
+                  <div className="relative flex-1">
+                    <input
+                      ref={inputRef}
+                      value={inputValue}
+                      onChange={handleInputChange}
+                      onKeyDown={handleInputKeyDown}
+                      onClick={handleInputClick}
+                      onSelect={handleInputClick}
+                      className="w-full bg-transparent text-text-primary outline-none font-mono text-xs caret-brand"
+                      spellCheck={false}
+                      autoComplete="off"
+                      autoFocus
+                    />
+                    {/* Remote cursors in terminal input */}
+                    {otherTerminalCursors.map((user) => {
+                      const pos = (user as PresenceUser & { terminalCursorPos?: number }).terminalCursorPos ?? 0
+                      // Approximate character width for cursor positioning
+                      const charWidth = 7.2 // monospace ~7.2px at 12px font size
+                      return (
+                        <div
+                          key={user.id}
+                          className="absolute top-0 pointer-events-none"
+                          style={{ left: `${pos * charWidth}px` }}
+                        >
+                          <div
+                            className="w-0.5 h-4 animate-pulse"
+                            style={{ backgroundColor: user.cursorColor }}
+                          />
+                          <div
+                            className="absolute -top-3.5 left-0 whitespace-nowrap rounded px-1 py-0.5 text-[9px] text-white"
+                            style={{ backgroundColor: user.cursorColor }}
+                          >
+                            {user.name.split(" ")[0]}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
               </div>
             )}
             <div ref={bottomRef} />

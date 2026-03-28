@@ -17,6 +17,8 @@ import {
   X,
   Copy,
   CheckCheck,
+  Trash2,
+  ClipboardCopy,
 } from "lucide-react"
 import Link from "next/link"
 import type { User, Project, FileNode, PresenceUser, AIAgent, Snapshot } from "@/data/types"
@@ -28,7 +30,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Input } from "@/components/ui/input"
 import { ResizeHandle } from "@/components/ui/resize-handle"
 import { PresenceDock } from "./presence-dock"
-import { FileTree } from "./file-tree"
+import { FileTree, getFileIcon } from "./file-tree"
 import { CodeEditor } from "./code-editor"
 import { TerminalPanel } from "./terminal-panel"
 import { CommandPalette } from "./command-palette"
@@ -37,6 +39,7 @@ import { AgentRoster } from "./agent-roster"
 import { AIInlinePrompt } from "./ai-inline-prompt"
 import { NewFileDialog } from "./new-file-dialog"
 import { useCollaboration } from "@/lib/collaboration"
+import { cn } from "@/lib/utils"
 
 interface WorkspaceShellProps {
   project: Project
@@ -102,6 +105,7 @@ export function WorkspaceShell({
   const [newFileDialogOpen, setNewFileDialogOpen] = useState(false)
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
   const [linkCopied, setLinkCopied] = useState(false)
+  const [tabContextMenu, setTabContextMenu] = useState<{ x: number; y: number; path: string } | null>(null)
 
   // Active terminal session
   const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null)
@@ -135,31 +139,6 @@ export function WorkspaceShell({
       setActiveTerminalId(collab.terminalSessions[0]?.id ?? null)
     }
   }, [collab.terminalSessions, activeTerminalId])
-
-  // Terminal draft awareness: extract other users' draft text from presence
-  const terminalDrafts = livePresence
-    .filter((p) => {
-      const userId = p.id.split(":")[0]
-      return userId !== currentUser.id
-    })
-    .map((p) => ({
-      userId: p.id,
-      name: p.name,
-      cursorColor: p.cursorColor,
-      sessionId: p.terminalSessionId ?? "",
-      text: p.terminalDraft ?? "",
-    }))
-    .filter((d) => d.sessionId && d.text)
-
-  const handleTerminalDraftChange = useCallback(
-    (sessionId: string, text: string) => {
-      collab.updateAwareness({
-        terminalSessionId: sessionId,
-        terminalDraft: text,
-      } as Record<string, unknown>)
-    },
-    [collab]
-  )
 
   const activeFile = files.find((f) => f.path === activeFilePath)
 
@@ -208,6 +187,15 @@ export function WorkspaceShell({
       })
     },
     [activeFilePath]
+  )
+
+  const handleDeleteFile = useCallback(
+    (path: string) => {
+      collab.deleteFile(path)
+      // Also close the tab if open
+      handleCloseTab(path)
+    },
+    [collab, handleCloseTab]
   )
 
   const handleRun = useCallback(() => {
@@ -433,7 +421,7 @@ export function WorkspaceShell({
                 presence={livePresence}
                 onOpenFile={handleOpenFile}
                 onNewFile={() => setNewFileDialogOpen(true)}
-                onDeleteFile={(path) => collab.deleteFile(path)}
+                onDeleteFile={handleDeleteFile}
                 onRenameFile={(oldPath, newPath) => collab.renameFile(oldPath, newPath)}
                 onCreateFile={handleCreateFile}
               />
@@ -470,10 +458,10 @@ export function WorkspaceShell({
             </Tooltip>
 
             {/* Tab bar */}
-            <div className="flex flex-1 items-center gap-0.5 overflow-x-auto">
+            <div className="flex flex-1 items-center gap-px overflow-x-auto">
               {openFiles.map((filePath) => {
                 const isActive = filePath === activeFilePath
-                const fileName = filePath.split("/").pop()
+                const fileName = filePath.split("/").pop() ?? filePath
                 return (
                   <div
                     key={filePath}
@@ -482,12 +470,18 @@ export function WorkspaceShell({
                     aria-selected={isActive}
                     onClick={() => setActiveFilePath(filePath)}
                     onKeyDown={(e) => { if (e.key === "Enter") setActiveFilePath(filePath) }}
-                    className={`group flex cursor-pointer items-center gap-1.5 rounded-md px-3 py-1 text-xs transition-colors ${
+                    onContextMenu={(e) => {
+                      e.preventDefault()
+                      setTabContextMenu({ x: e.clientX, y: e.clientY, path: filePath })
+                    }}
+                    className={cn(
+                      "group flex cursor-pointer items-center gap-1.5 px-3 py-1 text-xs transition-colors border-r border-border-subtle",
                       isActive
                         ? "bg-elevated text-text-primary"
-                        : "text-text-secondary hover:bg-hover hover:text-text-primary"
-                    }`}
+                        : "text-text-tertiary hover:bg-hover/50 hover:text-text-secondary"
+                    )}
                   >
+                    {getFileIcon(fileName, "h-3.5 w-3.5")}
                     <span className="truncate max-w-[120px]">{fileName}</span>
                     <button
                       onClick={(e) => {
@@ -496,7 +490,7 @@ export function WorkspaceShell({
                       }}
                       className="ml-1 rounded-sm opacity-0 transition-opacity group-hover:opacity-100 hover:bg-active"
                     >
-                      <span className="text-[10px] leading-none px-0.5">✕</span>
+                      <X className="h-3 w-3" />
                     </button>
                   </div>
                 )
@@ -595,8 +589,10 @@ export function WorkspaceShell({
                   onInput={(content) => {
                     if (activeTerminalId) collab.sendTerminalInput(activeTerminalId, content)
                   }}
-                  terminalDrafts={terminalDrafts}
-                  onDraftChange={handleTerminalDraftChange}
+                  inputYText={activeTerminalId ? collab.getTerminalInputYText(activeTerminalId) : undefined}
+                  awareness={collab.getAwareness()}
+                  presenceUsers={livePresence}
+                  currentUserId={currentUser.id}
                 />
               </div>
             </>
@@ -691,6 +687,26 @@ export function WorkspaceShell({
         onCreateFile={handleCreateFile}
       />
 
+      {/* Tab Context Menu (reuses sidebar file context menu) */}
+      <AnimatePresence>
+        {tabContextMenu && (
+          <TabContextMenu
+            x={tabContextMenu.x}
+            y={tabContextMenu.y}
+            path={tabContextMenu.path}
+            onClose={() => setTabContextMenu(null)}
+            onCloseTab={handleCloseTab}
+            onCloseOtherTabs={(path) => {
+              setOpenFiles([path])
+              setActiveFilePath(path)
+            }}
+            onDeleteFile={handleDeleteFile}
+            onRenameFile={(oldPath, newPath) => collab.renameFile(oldPath, newPath)}
+            onCopyPath={(path) => navigator.clipboard?.writeText(path)}
+          />
+        )}
+      </AnimatePresence>
+
       {/* Keyboard shortcut listener */}
       <KeyboardShortcuts
         onToggleCommandPalette={() => setCommandPaletteOpen((prev) => !prev)}
@@ -764,4 +780,96 @@ function KeyboardShortcuts({
   }, [onToggleCommandPalette, onToggleSidebar, onToggleTerminal, onRun, onToggleAiPrompt, onNewFile])
 
   return null
+}
+
+/** Context menu for tab chips (right-click on tab) */
+function TabContextMenu({
+  x,
+  y,
+  path,
+  onClose,
+  onCloseTab,
+  onCloseOtherTabs,
+  onDeleteFile,
+  onRenameFile,
+  onCopyPath,
+}: {
+  x: number
+  y: number
+  path: string
+  onClose: () => void
+  onCloseTab: (path: string) => void
+  onCloseOtherTabs: (path: string) => void
+  onDeleteFile: (path: string) => void
+  onRenameFile: (oldPath: string, newPath: string) => void
+  onCopyPath: (path: string) => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
+    }
+    const keyHandler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose()
+    }
+    document.addEventListener("mousedown", handler)
+    document.addEventListener("keydown", keyHandler)
+    return () => {
+      document.removeEventListener("mousedown", handler)
+      document.removeEventListener("keydown", keyHandler)
+    }
+  }, [onClose])
+
+  const actions = [
+    { label: "Close", action: () => { onCloseTab(path); onClose() } },
+    { label: "Close Others", action: () => { onCloseOtherTabs(path); onClose() } },
+    { divider: true },
+    { label: "Rename", icon: Pencil, action: () => {
+      const name = path.split("/").pop()!
+      const newName = prompt("Rename to:", name)
+      if (newName?.trim() && newName.trim() !== name) {
+        const parentPath = path.substring(0, path.lastIndexOf("/"))
+        onRenameFile(path, `${parentPath}/${newName.trim()}`)
+      }
+      onClose()
+    }},
+    { label: "Copy Path", icon: ClipboardCopy, action: () => { onCopyPath(path); onClose() } },
+    { divider: true },
+    { label: "Delete", icon: Trash2, destructive: true, action: () => { onDeleteFile(path); onClose() } },
+  ]
+
+  return (
+    <motion.div
+      ref={ref}
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.95 }}
+      transition={{ duration: 0.1 }}
+      className="fixed z-50 min-w-[160px] rounded-lg border border-border-default bg-popover p-1 shadow-xl"
+      style={{ left: x, top: y }}
+    >
+      {actions.map((item, i) => {
+        if ("divider" in item && item.divider) {
+          return <div key={`d-${i}`} className="my-1 h-px bg-border-subtle" />
+        }
+        const Icon = "icon" in item ? item.icon : null
+        return (
+          <button
+            key={item.label}
+            onClick={item.action}
+            className={cn(
+              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs transition-colors",
+              "destructive" in item && item.destructive
+                ? "text-error hover:bg-error-muted"
+                : "text-text-secondary hover:bg-hover hover:text-text-primary"
+            )}
+          >
+            {Icon && <Icon className="h-3.5 w-3.5" />}
+            <span className="flex-1 text-left">{item.label}</span>
+          </button>
+        )
+      })}
+    </motion.div>
+  )
 }

@@ -67,6 +67,8 @@ interface RoomUser {
   email: string
   cursorColor: string
   avatarUrl: string | null
+  /** The Yjs doc.clientID sent by the client (for awareness cleanup) */
+  yjsClientId: number | null
 }
 
 interface ProjectRoom {
@@ -221,8 +223,9 @@ export function setupCollaboration(io: SocketIOServer) {
       email: string
       cursorColor: string
       avatarUrl: string | null
+      clientId?: number
     }) => {
-      const { projectId, userId, name, email, cursorColor, avatarUrl } = data
+      const { projectId, userId, name, email, cursorColor, avatarUrl, clientId } = data
 
       // Leave previous room if any
       if (currentProjectId && currentRoom) {
@@ -247,18 +250,7 @@ export function setupCollaboration(io: SocketIOServer) {
         email,
         cursorColor,
         avatarUrl,
-      })
-
-      // Set awareness state for this client
-      currentRoom.awareness.setLocalStateField("user", {
-        userId,
-        name,
-        cursorColor,
-        avatarUrl,
-        activeFile: null,
-        cursorPosition: null,
-        isTyping: false,
-        isOnline: true,
+        yjsClientId: clientId ?? null,
       })
 
       // Send initial Yjs sync (step 1)
@@ -383,6 +375,12 @@ export function setupCollaboration(io: SocketIOServer) {
             timestamp: new Date().toISOString(),
           }])
         }
+
+        // Clear the shared input Y.Text after command submission
+        const inputText = sessionMap.get("input")
+        if (inputText instanceof Y.Text && inputText.length > 0) {
+          inputText.delete(0, inputText.length)
+        }
       }, "server")
     })
 
@@ -399,7 +397,10 @@ function leaveRoom(socket: Socket, projectId: string, room: ProjectRoom) {
   const roomName = `project:${projectId}`
   const user = room.users.get(socket.id)
 
-  awarenessProtocol.removeAwarenessStates(room.awareness, [room.doc.clientID], null)
+  // Remove the client's awareness state using their Yjs clientID (not the server's)
+  if (user?.yjsClientId != null) {
+    awarenessProtocol.removeAwarenessStates(room.awareness, [user.yjsClientId], null)
+  }
 
   room.users.delete(socket.id)
   socket.leave(roomName)
