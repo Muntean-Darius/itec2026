@@ -14,9 +14,13 @@ import {
   LogOut,
   Settings,
   FolderOpen,
+  Share2,
+  Copy,
+  CheckCheck,
+  Trash2,
 } from "lucide-react"
 import type { User, Project } from "@/data/types"
-import { signOut, createProject, deleteProject } from "@/app/actions"
+import { signOut, createProject, deleteProject, updateProject } from "@/app/actions"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -37,6 +41,8 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
+import { toast } from "sonner"
+import { getWorkspaceInviteUrl } from "@/lib/workspace-share"
 
 function getInitials(name: string) {
   return name
@@ -83,6 +89,12 @@ export function DashboardShell({ user, projects }: DashboardShellProps) {
   const [showNewProject, setShowNewProject] = useState(false)
   const [newProjectName, setNewProjectName] = useState("")
   const [newProjectDesc, setNewProjectDesc] = useState("")
+  const [editingProject, setEditingProject] = useState<Project | null>(null)
+  const [editingProjectName, setEditingProjectName] = useState("")
+  const [editingProjectDesc, setEditingProjectDesc] = useState("")
+  const [isSavingProject, setIsSavingProject] = useState(false)
+  const [inviteProject, setInviteProject] = useState<Project | null>(null)
+  const [inviteLinkCopied, setInviteLinkCopied] = useState(false)
   const [deletingProject, setDeletingProject] = useState<Project | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
 
@@ -104,6 +116,68 @@ export function DashboardShell({ user, projects }: DashboardShellProps) {
       p.name.toLowerCase().includes(search.toLowerCase()) ||
       p.description?.toLowerCase().includes(search.toLowerCase())
   )
+
+  const openProjectSettings = (project: Project) => {
+    setEditingProject(project)
+    setEditingProjectName(project.name)
+    setEditingProjectDesc(project.description ?? "")
+  }
+
+  const openInviteDialog = (project: Project) => {
+    setInviteProject(project)
+    setInviteLinkCopied(false)
+  }
+
+  const copyInviteLink = async () => {
+    if (!inviteProject || typeof window === "undefined") return
+
+    const inviteUrl = getWorkspaceInviteUrl(inviteProject.id, window.location.origin)
+    try {
+      await navigator.clipboard.writeText(inviteUrl)
+      setInviteLinkCopied(true)
+      toast.success("Invite link copied", {
+        description: `Share it to let collaborators join ${inviteProject.name}.`,
+      })
+      window.setTimeout(() => setInviteLinkCopied(false), 2000)
+    } catch {
+      toast.error("Unable to copy invite link", {
+        description: "Copy the link manually and try again.",
+      })
+    }
+  }
+
+  const handleSaveProjectSettings = async () => {
+    if (!editingProject) return
+
+    const trimmedName = editingProjectName.trim()
+    if (!trimmedName) {
+      toast.error("Workspace name is required", {
+        description: "Give the workspace a name before saving.",
+      })
+      return
+    }
+
+    setIsSavingProject(true)
+    const formData = new FormData()
+    formData.set("projectId", editingProject.id)
+    formData.set("name", trimmedName)
+    formData.set("description", editingProjectDesc.trim())
+
+    const result = await updateProject(formData)
+    setIsSavingProject(false)
+
+    if (result?.error) {
+      toast.error("Unable to update workspace", {
+        description: result.error,
+      })
+      return
+    }
+
+    toast.success("Workspace updated", {
+      description: `${trimmedName} is ready to go.`,
+    })
+    setEditingProject(null)
+  }
 
   return (
     <div className="flex h-full flex-col bg-background">
@@ -212,7 +286,13 @@ export function DashboardShell({ user, projects }: DashboardShellProps) {
               animate="show"
             >
               {filtered.map((project) => (
-                <ProjectCard key={project.id} project={project} onDelete={setDeletingProject} />
+                <ProjectCard
+                  key={project.id}
+                  project={project}
+                  onSettings={openProjectSettings}
+                  onInvite={openInviteDialog}
+                  onDelete={setDeletingProject}
+                />
               ))}
             </motion.div>
           )}
@@ -273,6 +353,93 @@ export function DashboardShell({ user, projects }: DashboardShellProps) {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={!!editingProject} onOpenChange={(open) => { if (!open) setEditingProject(null) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Workspace settings</DialogTitle>
+            <DialogDescription>
+              Update the workspace name and description without leaving the dashboard.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <label htmlFor="edit-project-name" className="text-sm font-medium text-text-secondary">
+                Name
+              </label>
+              <Input
+                id="edit-project-name"
+                value={editingProjectName}
+                onChange={(e) => setEditingProjectName(e.target.value)}
+                placeholder="Workspace name"
+                disabled={isSavingProject}
+                autoFocus
+              />
+            </div>
+            <div className="space-y-2">
+              <label htmlFor="edit-project-description" className="text-sm font-medium text-text-secondary">
+                Description <span className="text-text-tertiary">(optional)</span>
+              </label>
+              <Input
+                id="edit-project-description"
+                value={editingProjectDesc}
+                onChange={(e) => setEditingProjectDesc(e.target.value)}
+                placeholder="What&apos;s this workspace about?"
+                disabled={isSavingProject}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setEditingProject(null)} disabled={isSavingProject}>
+              Cancel
+            </Button>
+            <Button onClick={() => void handleSaveProjectSettings()} disabled={isSavingProject || !editingProjectName.trim()}>
+              {isSavingProject ? "Saving..." : "Save changes"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!inviteProject} onOpenChange={(open) => { if (!open) setInviteProject(null) }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Invite collaborators</DialogTitle>
+            <DialogDescription>
+              Share this link to let teammates join <strong>{inviteProject?.name}</strong>.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex items-center gap-2">
+            <Input
+              readOnly
+              value={
+                inviteProject && typeof window !== "undefined"
+                  ? getWorkspaceInviteUrl(inviteProject.id, window.location.origin)
+                  : ""
+              }
+              className="flex-1 text-sm"
+              onFocus={(e) => e.target.select()}
+            />
+            <Button
+              variant="default"
+              size="sm"
+              className="shrink-0 gap-1.5"
+              onClick={() => void copyInviteLink()}
+            >
+              {inviteLinkCopied ? (
+                <>
+                  <CheckCheck className="h-4 w-4" />
+                  Copied
+                </>
+              ) : (
+                <>
+                  <Copy className="h-4 w-4" />
+                  Copy
+                </>
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* ─── Delete Confirmation Dialog ─── */}
       <Dialog open={!!deletingProject} onOpenChange={(open) => { if (!open) setDeletingProject(null) }}>
         <DialogContent>
@@ -306,7 +473,17 @@ export function DashboardShell({ user, projects }: DashboardShellProps) {
   )
 }
 
-function ProjectCard({ project, onDelete }: { project: Project; onDelete: (project: Project) => void }) {
+function ProjectCard({
+  project,
+  onSettings,
+  onInvite,
+  onDelete,
+}: {
+  project: Project
+  onSettings: (project: Project) => void
+  onInvite: (project: Project) => void
+  onDelete: (project: Project) => void
+}) {
   return (
     <motion.div variants={itemVariants}>
       <Link
@@ -327,10 +504,19 @@ function ProjectCard({ project, onDelete }: { project: Project; onDelete: (proje
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" onClick={(e) => { e.preventDefault(); e.stopPropagation() }}>
-              <DropdownMenuItem onClick={(e) => { e.preventDefault(); e.stopPropagation() }}>Settings</DropdownMenuItem>
-              <DropdownMenuItem onClick={(e) => { e.preventDefault(); e.stopPropagation() }}>Invite</DropdownMenuItem>
+              <DropdownMenuItem onClick={(e) => { e.preventDefault(); e.stopPropagation(); onSettings(project) }}>
+                <Settings className="mr-2 h-4 w-4" />
+                Settings
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={(e) => { e.preventDefault(); e.stopPropagation(); onInvite(project) }}>
+                <Share2 className="mr-2 h-4 w-4" />
+                Invite
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem className="text-error" onClick={(e) => { e.preventDefault(); e.stopPropagation(); onDelete(project) }}>Delete</DropdownMenuItem>
+              <DropdownMenuItem className="text-error" onClick={(e) => { e.preventDefault(); e.stopPropagation(); onDelete(project) }}>
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
