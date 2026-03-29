@@ -19,6 +19,8 @@ import {
   CheckCheck,
   Trash2,
   ClipboardCopy,
+  FolderTree,
+  FolderGit2,
 } from "lucide-react"
 import Link from "next/link"
 import type { User, Project, FileNode, PresenceUser, AIAgent, Snapshot } from "@/data/types"
@@ -28,6 +30,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip
 import { Separator } from "@/components/ui/separator"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { ResizeHandle } from "@/components/ui/resize-handle"
 import { PresenceDock } from "./presence-dock"
 import { FileTree, getFileIcon } from "./file-tree"
@@ -38,6 +41,11 @@ import { TimeTravelSlider } from "./time-travel-slider"
 import { AgentRoster } from "./agent-roster"
 import { AIInlinePrompt } from "./ai-inline-prompt"
 import { AIPanel } from "./ai-panel"
+import { SourceControlPanel } from "./source-control-panel"
+import { BranchSelector } from "./branch-selector"
+import { SyncIndicator } from "./sync-indicator"
+import { DiffViewer } from "./diff-viewer"
+import { GitProvider, useGitOptional } from "@/lib/git"
 import { useCollaboration } from "@/lib/collaboration"
 import { cn } from "@/lib/utils"
 import { getWorkspaceInviteUrl } from "@/lib/workspace-share"
@@ -49,6 +57,10 @@ interface WorkspaceShellProps {
   currentUser: User
   agents: AIAgent[]
   snapshots: Snapshot[]
+  initialGitCredentials?: {
+    username: string
+    password: string
+  }
 }
 
 // Size constraints
@@ -69,6 +81,7 @@ export function WorkspaceShell({
   currentUser,
   agents,
   snapshots,
+  initialGitCredentials,
 }: WorkspaceShellProps) {
   // Real-time collaboration
   const collab = useCollaboration({
@@ -98,6 +111,8 @@ export function WorkspaceShell({
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [terminalOpen, setTerminalOpen] = useState(true)
   const [agentRosterOpen, setAgentRosterOpen] = useState(false)
+  const [sidebarTab, setSidebarTab] = useState<"files" | "git">("files")
+  const [diffViewPath, setDiffViewPath] = useState<string | null>(null)
 
   // Panel sizes (resizable)
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT)
@@ -557,6 +572,16 @@ export function WorkspaceShell({
   )
 
   return (
+    <GitProvider
+      projectId={project.id}
+      ydoc={collab.getYdoc()}
+      Y={collab.getYjs()}
+      initialAuthor={{
+        name: currentUser.name,
+        email: currentUser.email,
+      }}
+      initialCredentials={initialGitCredentials}
+    >
     <div className="flex h-full flex-col bg-background">
       {/* ─── Top Bar ─── */}
       <header className="grid h-11 shrink-0 grid-cols-[1fr_auto_1fr] items-center border-b border-border-subtle px-3">
@@ -700,6 +725,12 @@ export function WorkspaceShell({
 
         {/* Right: Actions + Presence */}
         <div className="flex items-center justify-end gap-2">
+          {/* Git: Branch Selector & Sync */}
+          <BranchSelector />
+          <SyncIndicator />
+
+          <Separator orientation="vertical" className="h-5" />
+
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -750,18 +781,50 @@ export function WorkspaceShell({
           <>
             <aside
               style={{ width: sidebarWidth }}
-              className="shrink-0 overflow-hidden border-r border-border-subtle bg-surface"
+              className="shrink-0 overflow-hidden border-r border-border-subtle bg-surface flex flex-col"
             >
-              <FileTree
-                files={files}
-                activeFilePath={activeFilePath}
-                presence={livePresence}
-                onOpenFile={handleOpenFile}
-                onDeleteFile={handleDeleteFile}
-                onRenameFile={(oldPath, newPath) => collab.renameFile(oldPath, newPath)}
-                onCreateFile={handleCreateFile}
-                createFileTrigger={createFileTrigger}
-              />
+              {/* Sidebar Tabs */}
+              <Tabs
+                value={sidebarTab}
+                onValueChange={(v) => setSidebarTab(v as "files" | "git")}
+                className="flex flex-col h-full"
+              >
+                <TabsList className="h-9 shrink-0 rounded-none border-b border-border-subtle bg-transparent p-0 justify-start">
+                  <TabsTrigger
+                    value="files"
+                    className="h-full rounded-none border-b-2 border-transparent data-[state=active]:border-brand data-[state=active]:bg-transparent px-3 text-xs"
+                  >
+                    <FolderTree className="h-3.5 w-3.5 mr-1.5" />
+                    Files
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="git"
+                    className="h-full rounded-none border-b-2 border-transparent data-[state=active]:border-brand data-[state=active]:bg-transparent px-3 text-xs"
+                  >
+                    <FolderGit2 className="h-3.5 w-3.5 mr-1.5" />
+                    Git
+                  </TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="files" className="flex-1 overflow-hidden m-0">
+                  <FileTree
+                    files={files}
+                    activeFilePath={activeFilePath}
+                    presence={livePresence}
+                    onOpenFile={handleOpenFile}
+                    onDeleteFile={handleDeleteFile}
+                    onRenameFile={(oldPath, newPath) => collab.renameFile(oldPath, newPath)}
+                    onCreateFile={handleCreateFile}
+                    createFileTrigger={createFileTrigger}
+                  />
+                </TabsContent>
+
+                <TabsContent value="git" className="flex-1 overflow-hidden m-0">
+                  <SourceControlPanel
+                    onViewDiff={(filepath) => setDiffViewPath(filepath)}
+                  />
+                </TabsContent>
+              </Tabs>
             </aside>
             <ResizeHandle
               direction="horizontal"
@@ -1196,7 +1259,24 @@ export function WorkspaceShell({
         onOpenChange={setCommandPaletteOpen}
         files={files}
         onOpenFile={handleOpenFile}
+        onToggleSourceControl={() => {
+          setSidebarOpen(true)
+          setSidebarTab("git")
+        }}
       />
+
+      {/* Diff Viewer Dialog */}
+      {diffViewPath && (
+        <Dialog open={!!diffViewPath} onOpenChange={() => setDiffViewPath(null)}>
+          <DialogContent className="max-w-4xl h-[80vh] p-0 overflow-hidden">
+            <DiffViewer
+              filepath={diffViewPath}
+              onClose={() => setDiffViewPath(null)}
+              className="h-full"
+            />
+          </DialogContent>
+        </Dialog>
+      )}
 
       {/* Tab Context Menu (reuses sidebar file context menu) */}
       <AnimatePresence>
@@ -1237,6 +1317,7 @@ export function WorkspaceShell({
         }}
       />
     </div>
+    </GitProvider>
   )
 }
 
