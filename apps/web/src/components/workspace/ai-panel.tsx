@@ -28,7 +28,6 @@ import type { AIAgent, AIChatSession, AIChatMessage, FileOperation, PresenceUser
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
-
 import { Input } from "@/components/ui/input"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
@@ -84,6 +83,44 @@ const AGENT_COLORS = [
 
 type PanelMode = "chats" | "agents" | "new-agent" | "edit-agent"
 const SHARED_DRAFT_CHAT_ID = "__draft__"
+const PROMPT_LINE_LIMIT = 36
+const PROMPT_LINE_HEIGHT = 16
+const PROMPT_CHAR_WIDTH = 7.2
+
+function wrapPromptText(value: string, limit = PROMPT_LINE_LIMIT) {
+  return value
+    .split("\n")
+    .map((line) => {
+      if (line.length <= limit) return line
+      let wrapped = ""
+      for (let i = 0; i < line.length; i += limit) {
+        if (i > 0) wrapped += "\n"
+        wrapped += line.slice(i, i + limit)
+      }
+      return wrapped
+    })
+    .join("\n")
+}
+
+function mapOffsetToWrapped(value: string, offset: number, limit = PROMPT_LINE_LIMIT) {
+  const safeOffset = Math.max(0, Math.min(offset, value.length))
+  return wrapPromptText(value.slice(0, safeOffset), limit).length
+}
+
+function offsetToLineColumn(value: string, offset: number) {
+  const safeOffset = Math.max(0, Math.min(offset, value.length))
+  let line = 0
+  let column = 0
+  for (let i = 0; i < safeOffset; i++) {
+    if (value[i] === "\n") {
+      line++
+      column = 0
+    } else {
+      column++
+    }
+  }
+  return { line, column }
+}
 
 export function AIPanel({
   agents,
@@ -262,7 +299,7 @@ function ChatView({
   const suppressYTextSync = useRef(false)
   const renameInputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
 
   const activeAgents = agents.filter((a) => a.isActive)
 
@@ -279,10 +316,19 @@ function ChatView({
     const yt = getChatInputYText(effectiveChatId) as any
     if (!yt) return
     // Sync initial value via microtask to avoid synchronous setState in effect
-    queueMicrotask(() => setInputValue(yt.toString()))
+    queueMicrotask(() => setInputValue(wrapPromptText(yt.toString())))
     const observer = () => {
       if (suppressYTextSync.current) return
-      setInputValue(yt.toString())
+      const wrapped = wrapPromptText(yt.toString())
+      setInputValue(wrapped)
+      if (wrapped !== yt.toString()) {
+        suppressYTextSync.current = true
+        yt.doc.transact(() => {
+          if (yt.length > 0) yt.delete(0, yt.length)
+          if (wrapped) yt.insert(0, wrapped)
+        })
+        suppressYTextSync.current = false
+      }
     }
     yt.observe(observer)
     return () => yt.unobserve(observer)
@@ -335,6 +381,16 @@ function ChatView({
     [currentUserId, effectiveChatId, presenceUsers]
   )
 
+  const renderedPromptCursors = useMemo(
+    () =>
+      otherPromptCursors.map((user) => {
+        const pos = user.aiPromptCursorPos ?? 0
+        const { line, column } = offsetToLineColumn(inputValue, pos)
+        return { user, line, column }
+      }),
+    [inputValue, otherPromptCursors]
+  )
+
   const updatePromptPresence = useCallback(
     (cursorPos: number | null, typing: boolean) => {
       onPromptPresenceUpdate?.({
@@ -353,10 +409,12 @@ function ChatView({
     updatePromptPresence(cursorPos, input.value.length > 0)
   }, [updatePromptPresence])
 
-  const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const newValue = e.target.value
-    const cursorPos = e.target.selectionStart ?? newValue.length
-    setInputValue(newValue)
+  const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const rawValue = e.target.value
+    const rawCursorPos = e.target.selectionStart ?? rawValue.length
+    const wrappedValue = wrapPromptText(rawValue)
+    const wrappedCursorPos = mapOffsetToWrapped(rawValue, rawCursorPos)
+    setInputValue(wrappedValue)
     // Sync to Y.Text for collaborative editing
     if (effectiveChatId && getChatInputYText) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -364,16 +422,21 @@ function ChatView({
       if (yt) {
         suppressYTextSync.current = true
         const current = yt.toString()
-        if (current !== newValue) {
+        if (current !== wrappedValue) {
           yt.doc.transact(() => {
             if (yt.length > 0) yt.delete(0, yt.length)
-            if (newValue) yt.insert(0, newValue)
+            if (wrappedValue) yt.insert(0, wrappedValue)
           })
         }
         suppressYTextSync.current = false
       }
     }
-    updatePromptPresence(cursorPos, newValue.length > 0)
+    queueMicrotask(() => {
+      if (document.activeElement === inputRef.current) {
+        inputRef.current?.setSelectionRange(wrappedCursorPos, wrappedCursorPos)
+      }
+    })
+    updatePromptPresence(wrappedCursorPos, wrappedValue.length > 0)
   }, [effectiveChatId, getChatInputYText, updatePromptPresence])
 
   const handleSend = useCallback(() => {
@@ -610,7 +673,7 @@ function ChatView({
         </div>
         <div className="flex items-center gap-2 min-w-0">
           <div className="relative min-w-0 flex-1">
-            <Input
+            <textarea
               ref={inputRef}
               value={inputValue}
               onChange={handleInputChange}
@@ -627,16 +690,18 @@ function ChatView({
                   handleSend()
                 }
               }}
-              className="h-8 border-0 bg-elevated focus-visible:ring-0 text-sm font-mono placeholder:text-text-tertiary min-w-0"
+              rows={3}
+              className="w-full resize-none rounded-lg border-0 bg-elevated px-3 py-2 font-mono text-xs leading-4 text-text-primary placeholder:text-text-tertiary outline-none focus:ring-1 focus:ring-brand/40 disabled:opacity-50 min-w-0"
             />
-            {otherPromptCursors.map((user) => {
-              const pos = user.aiPromptCursorPos ?? 0
-              const charWidth = 7.2
+            {renderedPromptCursors.map(({ user, line, column }) => {
               return (
                 <div
                   key={user.id}
-                  className="absolute top-2 pointer-events-none"
-                  style={{ left: `${Math.max(0, pos * charWidth) + 12}px` }}
+                  className="absolute pointer-events-none"
+                  style={{
+                    top: `${8 + line * PROMPT_LINE_HEIGHT}px`,
+                    left: `${12 + column * PROMPT_CHAR_WIDTH}px`,
+                  }}
                 >
                   <div className="w-0.5 h-4 animate-pulse" style={{ backgroundColor: user.cursorColor }} />
                   <div
