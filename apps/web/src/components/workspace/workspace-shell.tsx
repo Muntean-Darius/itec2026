@@ -75,6 +75,10 @@ const TERMINAL_DEFAULT = 300
 const AGENT_PANEL_MIN = 220
 const AGENT_PANEL_MAX = 400
 const AGENT_PANEL_DEFAULT = AGENT_PANEL_MAX
+const MAIN_EDITOR_MIN_WIDTH = 360
+const RESIZE_HANDLE_THICKNESS = 1
+const AI_PANEL_OPEN_KEY = (projectId: string) => `itecify:${projectId}:ai-panel-open`
+const ACTIVE_FILE_KEY = (projectId: string) => `itecify:${projectId}:active-file`
 
 export function WorkspaceShell({
   project,
@@ -85,6 +89,9 @@ export function WorkspaceShell({
   snapshots,
   initialGitCredentials,
 }: WorkspaceShellProps) {
+  const mainAreaRef = useRef<HTMLDivElement | null>(null)
+  const restoredWorkspacePrefsRef = useRef<string | null>(null)
+
   // Real-time collaboration
   const collab = useCollaboration({
     projectId: project.id,
@@ -143,6 +150,28 @@ export function WorkspaceShell({
     )
   }, [snapshots])
 
+  useEffect(() => {
+    restoredWorkspacePrefsRef.current = null
+  }, [project.id])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const stored = window.localStorage.getItem(AI_PANEL_OPEN_KEY(project.id))
+    if (stored === "1") setAgentRosterOpen(true)
+    if (stored === "0") setAgentRosterOpen(false)
+  }, [project.id])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    window.localStorage.setItem(AI_PANEL_OPEN_KEY(project.id), agentRosterOpen ? "1" : "0")
+  }, [project.id, agentRosterOpen])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (!activeFilePath) return
+    window.localStorage.setItem(ACTIVE_FILE_KEY(project.id), activeFilePath)
+  }, [project.id, activeFilePath])
+
   const resolveSnapshotFileStates = useCallback(
     (snapshot: Snapshot | null): Record<string, string> | null => {
       if (!snapshot) return null
@@ -197,6 +226,21 @@ export function WorkspaceShell({
     }
     return liveFiles
   }, [timeTravelActive, timeTravelSnapshot, liveFiles, resolveSnapshotFileStates])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (files.length === 0) return
+    if (restoredWorkspacePrefsRef.current === project.id) return
+
+    restoredWorkspacePrefsRef.current = project.id
+    const storedActiveFile = window.localStorage.getItem(ACTIVE_FILE_KEY(project.id))
+    if (!storedActiveFile) return
+    if (!files.some((file) => file.path === storedActiveFile)) return
+
+    setActiveFilePath(storedActiveFile)
+    setOpenFiles((prev) => (prev.includes(storedActiveFile) ? prev : [...prev, storedActiveFile]))
+    collab.updateAwareness({ activeFile: storedActiveFile })
+  }, [project.id, files, collab])
 
   // Active terminal session
   const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null)
@@ -479,13 +523,6 @@ export function WorkspaceShell({
   }, [timeTravelActive, liveFiles.length, createLocalSnapshot])
 
   // Resize handlers
-  const handleSidebarResize = useCallback(
-    (delta: number) => {
-      setSidebarWidth((w) => Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, w + delta)))
-    },
-    []
-  )
-
   const handleTerminalResize = useCallback(
     (delta: number) => {
       setTerminalHeight((h) => Math.min(TERMINAL_MAX, Math.max(TERMINAL_MIN, h - delta)))
@@ -493,12 +530,98 @@ export function WorkspaceShell({
     []
   )
 
+  const getMainAreaWidth = useCallback(() => {
+    if (mainAreaRef.current) return mainAreaRef.current.clientWidth
+    if (typeof window !== "undefined") return window.innerWidth
+    return 0
+  }, [])
+
+  const getSidebarMaxWidth = useCallback(
+    (mainAreaWidth: number, currentAgentPanelWidth: number) => {
+      const agentSpace = agentRosterOpen
+        ? currentAgentPanelWidth + RESIZE_HANDLE_THICKNESS
+        : 0
+      return Math.min(
+        SIDEBAR_MAX,
+        Math.max(0, mainAreaWidth - MAIN_EDITOR_MIN_WIDTH - agentSpace - RESIZE_HANDLE_THICKNESS)
+      )
+    },
+    [agentRosterOpen]
+  )
+
+  const getAgentPanelMaxWidth = useCallback(
+    (mainAreaWidth: number, currentSidebarWidth: number) => {
+      const sidebarSpace = sidebarOpen
+        ? currentSidebarWidth + RESIZE_HANDLE_THICKNESS
+        : 0
+      return Math.min(
+        AGENT_PANEL_MAX,
+        Math.max(0, mainAreaWidth - MAIN_EDITOR_MIN_WIDTH - sidebarSpace - RESIZE_HANDLE_THICKNESS)
+      )
+    },
+    [sidebarOpen]
+  )
+
+  const handleSidebarResize = useCallback(
+    (delta: number) => {
+      const mainAreaWidth = getMainAreaWidth()
+      setSidebarWidth((w) => {
+        const maxWidth = getSidebarMaxWidth(mainAreaWidth, agentPanelWidth)
+        const minWidth = Math.min(SIDEBAR_MIN, maxWidth)
+        return Math.min(maxWidth, Math.max(minWidth, w + delta))
+      })
+    },
+    [agentPanelWidth, getMainAreaWidth, getSidebarMaxWidth]
+  )
+
   const handleAgentPanelResize = useCallback(
     (delta: number) => {
-      setAgentPanelWidth((w) => Math.min(AGENT_PANEL_MAX, Math.max(AGENT_PANEL_MIN, w - delta)))
+      const mainAreaWidth = getMainAreaWidth()
+      setAgentPanelWidth((w) => {
+        const maxWidth = getAgentPanelMaxWidth(mainAreaWidth, sidebarWidth)
+        const minWidth = Math.min(AGENT_PANEL_MIN, maxWidth)
+        return Math.min(maxWidth, Math.max(minWidth, w - delta))
+      })
     },
-    []
+    [getAgentPanelMaxWidth, getMainAreaWidth, sidebarWidth]
   )
+
+  useEffect(() => {
+    const clampHorizontalPanels = () => {
+      const mainAreaWidth = getMainAreaWidth()
+      if (!mainAreaWidth) return
+
+      const sidebarMax = getSidebarMaxWidth(mainAreaWidth, agentPanelWidth)
+      const sidebarMin = Math.min(SIDEBAR_MIN, sidebarMax)
+      const clampedSidebar = sidebarOpen
+        ? Math.min(sidebarMax, Math.max(sidebarMin, sidebarWidth))
+        : sidebarWidth
+
+      if (sidebarOpen && clampedSidebar !== sidebarWidth) {
+        setSidebarWidth(clampedSidebar)
+      }
+
+      if (!agentRosterOpen) return
+      const agentMax = getAgentPanelMaxWidth(mainAreaWidth, clampedSidebar)
+      const agentMin = Math.min(AGENT_PANEL_MIN, agentMax)
+      const clampedAgent = Math.min(agentMax, Math.max(agentMin, agentPanelWidth))
+      if (clampedAgent !== agentPanelWidth) {
+        setAgentPanelWidth(clampedAgent)
+      }
+    }
+
+    clampHorizontalPanels()
+    window.addEventListener("resize", clampHorizontalPanels)
+    return () => window.removeEventListener("resize", clampHorizontalPanels)
+  }, [
+    agentPanelWidth,
+    agentRosterOpen,
+    getAgentPanelMaxWidth,
+    getMainAreaWidth,
+    getSidebarMaxWidth,
+    sidebarOpen,
+    sidebarWidth,
+  ])
 
   // ── Compute AI blocks for the currently open file ──
   const activeFileAIBlocks = useMemo<AIBlock[]>(() => {
@@ -821,7 +944,7 @@ export function WorkspaceShell({
       </header>
 
       {/* ─── Main Area ─── */}
-      <div className="flex flex-1 overflow-hidden">
+      <div ref={mainAreaRef} className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
         {sidebarOpen && (
           <>
@@ -900,7 +1023,7 @@ export function WorkspaceShell({
         )}
 
         {/* Editor + Terminal Column */}
-        <div className="flex flex-1 flex-col overflow-hidden">
+        <div className="flex flex-1 min-w-0 flex-col overflow-hidden">
           {/* Editor Toolbar */}
           <div className="flex h-9 shrink-0 items-center border-b border-border-subtle bg-surface px-1">
             <Tooltip>
@@ -1211,6 +1334,7 @@ export function WorkspaceShell({
                 onRenameChat={collab.renameAIChat}
                 onDeleteChat={collab.deleteAIChat}
                 getChatInputYText={collab.getAIChatInputYText}
+                onPromptPresenceUpdate={collab.updateAwareness}
               />
             </aside>
           </>

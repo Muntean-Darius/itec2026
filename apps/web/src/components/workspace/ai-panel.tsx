@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef, useEffect, useCallback } from "react"
+import { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import {
   Bot,
@@ -61,6 +61,12 @@ interface AIPanelProps {
   onDeleteChat: (chatId: string) => void
   /** Collaborative input Y.Text getter */
   getChatInputYText: (chatId: string) => unknown
+  /** Update presence state for collaborative prompt editing */
+  onPromptPresenceUpdate?: (state: {
+    aiPromptChatId?: string | null
+    aiPromptCursorPos?: number | null
+    isTyping?: boolean
+  }) => void
 }
 
 // ─── Agent Colors ────────────────────────────────────────────────────────
@@ -95,6 +101,7 @@ export function AIPanel({
   onRenameChat,
   onDeleteChat,
   getChatInputYText,
+  onPromptPresenceUpdate,
 }: AIPanelProps) {
   const [mode, setMode] = useState<PanelMode>("chats")
   const [activeChatId, setActiveChatId] = useState<string | null>(null)
@@ -159,6 +166,7 @@ export function AIPanel({
             }
           }}
           getChatInputYText={getChatInputYText}
+          onPromptPresenceUpdate={onPromptPresenceUpdate}
         />
       )}
 
@@ -223,6 +231,7 @@ function ChatView({
   onRenameChat,
   onDeleteChat,
   getChatInputYText,
+  onPromptPresenceUpdate,
 }: {
   agents: AIAgent[]
   chatSessions: AIChatSession[]
@@ -240,6 +249,7 @@ function ChatView({
   onRenameChat: (chatId: string, name: string) => void
   onDeleteChat: (chatId: string) => void
   getChatInputYText: (chatId: string) => unknown
+  onPromptPresenceUpdate?: AIPanelProps["onPromptPresenceUpdate"]
 }) {
   const [inputValue, setInputValue] = useState("")
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
@@ -310,8 +320,41 @@ function ChatView({
 
   const selectedAgent = agents.find((a) => a.id === effectiveAgentId)
 
+  const otherPromptCursors = useMemo(
+    () =>
+      presenceUsers.filter((user) => {
+        const userId = user.id.split(":")[0]
+        return (
+          userId !== currentUserId &&
+          user.isOnline &&
+          user.aiPromptChatId === effectiveChatId &&
+          typeof user.aiPromptCursorPos === "number"
+        )
+      }),
+    [currentUserId, effectiveChatId, presenceUsers]
+  )
+
+  const updatePromptPresence = useCallback(
+    (cursorPos: number | null, typing: boolean) => {
+      onPromptPresenceUpdate?.({
+        aiPromptChatId: effectiveChatId ?? null,
+        aiPromptCursorPos: cursorPos,
+        isTyping: typing,
+      })
+    },
+    [effectiveChatId, onPromptPresenceUpdate]
+  )
+
+  const handleInputCursorUpdate = useCallback(() => {
+    const input = inputRef.current
+    if (!input) return
+    const cursorPos = input.selectionStart ?? input.value.length
+    updatePromptPresence(cursorPos, input.value.length > 0)
+  }, [updatePromptPresence])
+
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const newValue = e.target.value
+    const cursorPos = e.target.selectionStart ?? newValue.length
     setInputValue(newValue)
     // Sync to Y.Text for collaborative editing
     if (effectiveChatId && getChatInputYText) {
@@ -329,7 +372,8 @@ function ChatView({
         suppressYTextSync.current = false
       }
     }
-  }, [effectiveChatId, getChatInputYText])
+    updatePromptPresence(cursorPos, newValue.length > 0)
+  }, [effectiveChatId, getChatInputYText, updatePromptPresence])
 
   const handleSend = useCallback(() => {
     if (!inputValue.trim()) return
@@ -360,8 +404,22 @@ function ChatView({
         suppressYTextSync.current = false
       }
     }
+    updatePromptPresence(0, false)
     inputRef.current?.focus()
-  }, [inputValue, selectedAgent, activeChatId, onSendChat, onSelectChat, effectiveChatId, getChatInputYText])
+  }, [inputValue, selectedAgent, activeChatId, onSendChat, onSelectChat, effectiveChatId, getChatInputYText, updatePromptPresence])
+
+  useEffect(() => {
+    if (document.activeElement !== inputRef.current) return
+    const cursorPos = inputRef.current?.selectionStart ?? inputValue.length
+    updatePromptPresence(cursorPos, inputValue.length > 0)
+  }, [effectiveChatId, inputValue.length, updatePromptPresence])
+
+  useEffect(
+    () => () => {
+      onPromptPresenceUpdate?.({ aiPromptChatId: null, aiPromptCursorPos: null, isTyping: false })
+    },
+    [onPromptPresenceUpdate]
+  )
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden min-h-0 min-w-0">
@@ -550,20 +608,46 @@ function ChatView({
           )}
         </div>
         <div className="flex items-center gap-2 min-w-0">
-          <Input
-            ref={inputRef}
-            value={inputValue}
-            onChange={handleInputChange}
-            placeholder={selectedAgent ? `Ask ${selectedAgent.name}...` : "Ask AI Assistant..."}
-            disabled={activeChat?.isGenerating}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault()
-                handleSend()
-              }
-            }}
-            className="h-8 border-0 bg-elevated focus-visible:ring-0 text-sm placeholder:text-text-tertiary min-w-0"
-          />
+          <div className="relative min-w-0 flex-1">
+            <Input
+              ref={inputRef}
+              value={inputValue}
+              onChange={handleInputChange}
+              onClick={handleInputCursorUpdate}
+              onSelect={handleInputCursorUpdate}
+              onKeyUp={handleInputCursorUpdate}
+              onFocus={handleInputCursorUpdate}
+              onBlur={() => onPromptPresenceUpdate?.({ aiPromptChatId: null, aiPromptCursorPos: null, isTyping: false })}
+              placeholder={selectedAgent ? `Ask ${selectedAgent.name}...` : "Ask AI Assistant..."}
+              disabled={activeChat?.isGenerating}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault()
+                  handleSend()
+                }
+              }}
+              className="h-8 border-0 bg-elevated focus-visible:ring-0 text-sm font-mono placeholder:text-text-tertiary min-w-0"
+            />
+            {otherPromptCursors.map((user) => {
+              const pos = user.aiPromptCursorPos ?? 0
+              const charWidth = 7.2
+              return (
+                <div
+                  key={user.id}
+                  className="absolute top-2 pointer-events-none"
+                  style={{ left: `${Math.max(0, pos * charWidth) + 12}px` }}
+                >
+                  <div className="w-0.5 h-4 animate-pulse" style={{ backgroundColor: user.cursorColor }} />
+                  <div
+                    className="absolute -top-4 left-0 whitespace-nowrap rounded px-1 py-0.5 text-[9px] text-white"
+                    style={{ backgroundColor: user.cursorColor }}
+                  >
+                    {user.name.split(" ")[0]}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
           <Button
             size="icon"
             className="h-7 w-7 shrink-0"

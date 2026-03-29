@@ -35,6 +35,9 @@ interface AwarenessState {
   isTyping: boolean
   terminalSessionId?: string
   terminalDraft?: string
+  terminalCursorPos?: number
+  aiPromptChatId?: string | null
+  aiPromptCursorPos?: number | null
   [key: string]: unknown
 }
 
@@ -223,6 +226,8 @@ export function useCollaboration({
           terminalSessionId: u.terminalSessionId as string | undefined,
           terminalDraft: u.terminalDraft as string | undefined,
           terminalCursorPos: u.terminalCursorPos as number | undefined,
+          aiPromptChatId: u.aiPromptChatId as string | undefined,
+          aiPromptCursorPos: u.aiPromptCursorPos as number | undefined,
         })
       }
     })
@@ -324,7 +329,6 @@ export function useCollaboration({
 
   useEffect(() => {
     let destroyed = false
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let cleanupFn: (() => void) | undefined
 
     async function init() {
@@ -573,6 +577,8 @@ export function useCollaboration({
         cursorPosition: null,
         isTyping: false,
         isOnline: true,
+        aiPromptChatId: null,
+        aiPromptCursorPos: null,
       })
       // Top-level fields for y-monaco (reads state.name, state.color directly)
       awareness.setLocalStateField("name", currentUser.name)
