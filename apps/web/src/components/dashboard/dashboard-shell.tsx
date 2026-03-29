@@ -1,8 +1,8 @@
 "use client"
 
-import { useState, useActionState } from "react"
+import { useState, useActionState, useRef, type DragEvent } from "react"
 import Link from "next/link"
-import { motion } from "framer-motion"
+import { motion, AnimatePresence } from "framer-motion"
 import {
   Plus,
   Search,
@@ -18,6 +18,9 @@ import {
   Copy,
   CheckCheck,
   Trash2,
+  GitBranch,
+  Upload,
+  FileCode2,
 } from "lucide-react"
 import type { User, Project } from "@/data/types"
 import { signOut, createProject, deleteProject, updateProject } from "@/app/actions"
@@ -41,8 +44,36 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { toast } from "sonner"
 import { getWorkspaceInviteUrl } from "@/lib/workspace-share"
+
+const MAX_IMPORT_FILES = 2_000
+const MAX_IMPORT_TOTAL_BYTES = 250 * 1024 * 1024
+
+interface WebkitFileSystemEntry {
+  isFile: boolean
+  isDirectory: boolean
+  fullPath: string
+  name: string
+}
+
+interface WebkitFileSystemFileEntry extends WebkitFileSystemEntry {
+  isFile: true
+  file: (success: (file: File) => void, error?: (err: DOMException) => void) => void
+}
+
+interface WebkitFileSystemDirectoryReader {
+  readEntries: (
+    success: (entries: WebkitFileSystemEntry[]) => void,
+    error?: (err: DOMException) => void
+  ) => void
+}
+
+interface WebkitFileSystemDirectoryEntry extends WebkitFileSystemEntry {
+  isDirectory: true
+  createReader: () => WebkitFileSystemDirectoryReader
+}
 
 function getInitials(name: string) {
   return name
@@ -87,6 +118,8 @@ interface DashboardShellProps {
 export function DashboardShell({ user, projects }: DashboardShellProps) {
   const [search, setSearch] = useState("")
   const [showNewProject, setShowNewProject] = useState(false)
+  const [createMode, setCreateMode] = useState<"blank" | "github" | "import">("blank")
+  const [lastSubmitMode, setLastSubmitMode] = useState<"blank" | "github" | "import" | null>(null)
   const [newProjectName, setNewProjectName] = useState("")
   const [newProjectDesc, setNewProjectDesc] = useState("")
   const [editingProject, setEditingProject] = useState<Project | null>(null)
@@ -95,21 +128,205 @@ export function DashboardShell({ user, projects }: DashboardShellProps) {
   const [isSavingProject, setIsSavingProject] = useState(false)
   const [inviteProject, setInviteProject] = useState<Project | null>(null)
   const [inviteLinkCopied, setInviteLinkCopied] = useState(false)
+  const [githubUrl, setGithubUrl] = useState("")
+  const [importFileStates, setImportFileStates] = useState("")
+  const [importSummary, setImportSummary] = useState("")
+  const [isImportDragging, setIsImportDragging] = useState(false)
+  const [localImportError, setLocalImportError] = useState("")
   const [deletingProject, setDeletingProject] = useState<Project | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
+  const importInputRef = useRef<HTMLInputElement>(null)
+  const [tabVersion, setTabVersion] = useState(0)
 
-  const [_createState, createAction, isCreating] = useActionState(
+  const [createState, createAction, isCreating] = useActionState(
     async (_prev: { error?: string } | null, formData: FormData) => {
+      const source = ((formData.get("source") as string) || "blank") as "blank" | "github" | "import"
+      setLastSubmitMode(source)
       const result = await createProject(null, formData)
       if (!result?.error) {
         setShowNewProject(false)
+        setCreateMode("blank")
         setNewProjectName("")
         setNewProjectDesc("")
+        setGithubUrl("")
+        setImportFileStates("")
+        setImportSummary("")
+        setLocalImportError("")
       }
       return result ?? null
     },
     null
   )
+
+  const clearImportState = () => {
+    setImportFileStates("")
+    setImportSummary("")
+    setLocalImportError("")
+    setNewProjectName("")
+    if (importInputRef.current) {
+      importInputRef.current.value = ""
+    }
+  }
+
+  const clearGithubState = () => {
+    setGithubUrl("")
+    setNewProjectName("")
+    setLocalImportError("")
+  }
+
+  const applyPrefilledName = (value: string) => {
+    if (!value) return
+    setNewProjectName((prev) => (prev.trim() ? prev : value))
+  }
+
+  const tryPrefillNameFromGithub = (url: string) => {
+    try {
+      const parsed = new URL(url)
+      if (parsed.hostname !== "github.com") return
+      const parts = parsed.pathname.split("/").filter(Boolean)
+      if (parts.length < 2) return
+      const repo = parts[1].replace(/\.git$/, "")
+      if (repo) applyPrefilledName(repo)
+    } catch {
+      return
+    }
+  }
+
+  const processImportedFiles = async (
+    files: Array<{ file: File; relativePath: string }>,
+    rootFolderHint?: string
+  ) => {
+    if (files.length === 0) {
+      setImportFileStates("")
+      setImportSummary("")
+      setLocalImportError("Please select a folder with files.")
+      return
+    }
+
+    if (files.length > MAX_IMPORT_FILES) {
+      setImportFileStates("")
+      setImportSummary("")
+      setLocalImportError(`Import supports up to ${MAX_IMPORT_FILES} files.`)
+      return
+    }
+
+    const rootFolderName =
+      rootFolderHint ??
+      files[0]?.relativePath.split("/").filter(Boolean)[0] ??
+      files[0]?.file.name.replace(/\.[^/.]+$/, "")
+    applyPrefilledName(rootFolderName)
+
+    let totalBytes = 0
+    const states: Record<string, string> = {}
+    for (const entry of files) {
+      const content = await entry.file.text()
+      totalBytes += new TextEncoder().encode(content).length
+      if (totalBytes > MAX_IMPORT_TOTAL_BYTES) {
+        setImportFileStates("")
+        setImportSummary("")
+        setLocalImportError("Imported files are too large. Keep total text under 250MB.")
+        return
+      }
+      states[`/${entry.relativePath.replace(/\\/g, "/")}`] = content
+    }
+
+    setImportFileStates(JSON.stringify(states))
+    setImportSummary(`${files.length} file${files.length === 1 ? "" : "s"} ready to import`)
+    setLocalImportError("")
+  }
+
+  const readImportFilesFromInput = async (files: FileList | null) => {
+    if (!files || files.length === 0) {
+      await processImportedFiles([])
+      return
+    }
+
+    const entries = Array.from(files).map((file) => {
+      const withRelative = file as File & { webkitRelativePath?: string }
+      return {
+        file,
+        relativePath: withRelative.webkitRelativePath || file.name,
+      }
+    })
+
+    const rootFromInput =
+      entries[0]?.relativePath.split("/").filter(Boolean)[0] ??
+      entries[0]?.file.name.replace(/\.[^/.]+$/, "")
+
+    await processImportedFiles(entries, rootFromInput)
+  }
+
+  const readImportFilesFromDrop = async (event: DragEvent<HTMLButtonElement>) => {
+    const items = Array.from(event.dataTransfer.items || [])
+    const getEntry = (item: DataTransferItem): WebkitFileSystemEntry | null => {
+      const candidate = item as DataTransferItem & {
+        webkitGetAsEntry?: () => WebkitFileSystemEntry | null
+      }
+      return typeof candidate.webkitGetAsEntry === "function"
+        ? candidate.webkitGetAsEntry()
+        : null
+    }
+
+    const firstEntry = items[0] ? getEntry(items[0]) : null
+
+    if (!firstEntry) {
+      await readImportFilesFromInput(event.dataTransfer.files)
+      return
+    }
+
+    const readDirectoryEntries = (entry: WebkitFileSystemDirectoryEntry): Promise<WebkitFileSystemEntry[]> =>
+      new Promise((resolve, reject) => {
+        const reader = entry.createReader()
+        const allEntries: WebkitFileSystemEntry[] = []
+        const readBatch = () => {
+          reader.readEntries(
+            (batch) => {
+              if (batch.length === 0) {
+                resolve(allEntries)
+                return
+              }
+              allEntries.push(...batch)
+              readBatch()
+            },
+            (err) => reject(err)
+          )
+        }
+        readBatch()
+      })
+
+    const walkEntry = async (
+      entry: WebkitFileSystemEntry,
+      currentPath = ""
+    ): Promise<Array<{ file: File; relativePath: string }>> => {
+      if (entry.isFile) {
+        const fileEntry = entry as WebkitFileSystemFileEntry
+        const file = await new Promise<File>((resolve, reject) => {
+          fileEntry.file(resolve, reject)
+        })
+        return [{ file, relativePath: currentPath || file.name }]
+      }
+
+      if (!entry.isDirectory) return []
+      const dirEntry = entry as WebkitFileSystemDirectoryEntry
+      const children = await readDirectoryEntries(dirEntry)
+      const nested = await Promise.all(
+        children.map((child) => {
+          const nextPath = currentPath ? `${currentPath}/${child.name}` : child.name
+          return walkEntry(child, nextPath)
+        })
+      )
+      return nested.flat()
+    }
+
+    const droppedEntries = await Promise.all(
+      items
+        .map((item) => getEntry(item))
+        .filter((entry): entry is WebkitFileSystemEntry => Boolean(entry))
+        .map((entry) => walkEntry(entry, entry.name))
+    )
+
+    await processImportedFiles(droppedEntries.flat(), firstEntry.name)
+  }
 
   const filtered = projects.filter(
     (p) =>
@@ -301,7 +518,7 @@ export function DashboardShell({ user, projects }: DashboardShellProps) {
 
       {/* ─── New Project Dialog ─── */}
       <Dialog open={showNewProject} onOpenChange={setShowNewProject}>
-        <DialogContent>
+        <DialogContent className="rounded-xl">
           <DialogHeader>
             <DialogTitle>Create new workspace</DialogTitle>
             <DialogDescription>
@@ -309,44 +526,244 @@ export function DashboardShell({ user, projects }: DashboardShellProps) {
               collaborators after creating the workspace.
             </DialogDescription>
           </DialogHeader>
-          <form
-            action={createAction}
-            className="space-y-4 py-4"
-          >
-            <div className="space-y-2">
-              <label htmlFor="project-name" className="text-sm font-medium text-text-secondary">
-                Name
-              </label>
-              <Input
-                id="project-name"
-                name="name"
-                placeholder="Workspace name"
-                value={newProjectName}
-                onChange={(e) => setNewProjectName(e.target.value)}
-                autoFocus
-                required
-                disabled={isCreating}
-              />
-            </div>
-            <div className="space-y-2">
-              <label htmlFor="project-desc" className="text-sm font-medium text-text-secondary">
-                Description <span className="text-text-tertiary">(optional)</span>
-              </label>
-              <Input
-                id="project-desc"
-                name="description"
-                placeholder="What's this workspace about?"
-                value={newProjectDesc}
-                onChange={(e) => setNewProjectDesc(e.target.value)}
-                disabled={isCreating}
-              />
-            </div>
+          <form action={createAction} className="space-y-4 py-4">
+            <input type="hidden" name="source" value={createMode} />
+            <input type="hidden" name="fileStates" value={importFileStates} />
+
+            <Tabs
+              value={createMode}
+              onValueChange={(value) => {
+                const next = value as "blank" | "github" | "import"
+                if (next === "import") {
+                  clearGithubState()
+                } else if (next === "github") {
+                  clearImportState()
+                } else {
+                  clearGithubState()
+                  clearImportState()
+                }
+                setTabVersion((prev) => prev + 1)
+                setCreateMode(next)
+              }}
+            >
+              <TabsList className="grid h-10 w-full grid-cols-3 rounded-lg bg-elevated p-1">
+                <TabsTrigger value="blank" className="gap-1.5">
+                  <FileCode2 className="h-3.5 w-3.5" />
+                  Blank
+                </TabsTrigger>
+                <TabsTrigger value="github" className="gap-1.5">
+                  <GitBranch className="h-3.5 w-3.5" />
+                  GitHub
+                </TabsTrigger>
+                <TabsTrigger value="import" className="gap-1.5">
+                  <Upload className="h-3.5 w-3.5" />
+                  Import
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.div
+                key={`${createMode}-${tabVersion}`}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.2, ease: "easeOut" }}
+                className="space-y-4"
+              >
+                {createMode === "blank" && (
+                  <>
+                    <div className="space-y-2">
+                      <label htmlFor="project-name" className="text-sm font-medium text-text-secondary">
+                        Workspace Title
+                      </label>
+                      <Input
+                        id="project-name"
+                        name="name"
+                        placeholder="Workspace name"
+                        value={newProjectName}
+                        onChange={(e) => setNewProjectName(e.target.value)}
+                        autoFocus
+                        required
+                        disabled={isCreating}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label htmlFor="project-desc" className="text-sm font-medium text-text-secondary">
+                        Description <span className="text-text-tertiary">(optional)</span>
+                      </label>
+                      <Input
+                        id="project-desc"
+                        name="description"
+                        placeholder="What's this workspace about?"
+                        value={newProjectDesc}
+                        onChange={(e) => setNewProjectDesc(e.target.value)}
+                        disabled={isCreating}
+                      />
+                    </div>
+                  </>
+                )}
+
+                {createMode === "github" && (
+                  <>
+                    <div className="space-y-2">
+                      <label htmlFor="github-url" className="text-sm font-medium text-text-secondary">
+                        GitHub Repository URL
+                      </label>
+                      <Input
+                        id="github-url"
+                        name="githubUrl"
+                        placeholder="https://github.com/user/repo"
+                        value={githubUrl}
+                        onChange={(e) => {
+                          const value = e.target.value
+                          setGithubUrl(value)
+                          tryPrefillNameFromGithub(value)
+                        }}
+                        autoFocus
+                        required
+                        disabled={isCreating}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label htmlFor="project-name-github" className="text-sm font-medium text-text-secondary">
+                        Workspace Title
+                      </label>
+                      <Input
+                        id="project-name-github"
+                        name="name"
+                        placeholder="Workspace name"
+                        value={newProjectName}
+                        onChange={(e) => setNewProjectName(e.target.value)}
+                        required
+                        disabled={isCreating}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label htmlFor="project-desc-github" className="text-sm font-medium text-text-secondary">
+                        Description <span className="text-text-tertiary">(optional)</span>
+                      </label>
+                      <Input
+                        id="project-desc-github"
+                        name="description"
+                        placeholder="What's this workspace about?"
+                        value={newProjectDesc}
+                        onChange={(e) => setNewProjectDesc(e.target.value)}
+                        disabled={isCreating}
+                      />
+                    </div>
+                  </>
+                )}
+
+                {createMode === "import" && (
+                  <>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-text-secondary">
+                        Local Folder
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => importInputRef.current?.click()}
+                        onDragOver={(e) => {
+                          e.preventDefault()
+                          setIsImportDragging(true)
+                        }}
+                        onDragLeave={() => setIsImportDragging(false)}
+                        onDrop={async (e) => {
+                          e.preventDefault()
+                          setIsImportDragging(false)
+                          await readImportFilesFromDrop(e)
+                        }}
+                        className={`w-full rounded-xl border border-dashed px-4 py-8 text-sm transition-colors ${
+                          isImportDragging
+                            ? "border-brand bg-brand-muted text-text-primary"
+                            : "border-border-default bg-elevated/40 text-text-secondary hover:border-brand-muted-border"
+                        }`}
+                        disabled={isCreating}
+                      >
+                        Drop a folder here, or click to browse
+                      </button>
+                      <input
+                        ref={importInputRef}
+                        type="file"
+                        // @ts-expect-error non-standard but supported in Chromium/Safari
+                        webkitdirectory=""
+                        directory=""
+                        className="hidden"
+                        multiple
+                        onChange={async (e) => {
+                          await readImportFilesFromInput(e.target.files)
+                        }}
+                        disabled={isCreating}
+                      />
+                      {importSummary && <p className="text-xs text-success">{importSummary}</p>}
+                      {localImportError && <p className="text-xs text-error">{localImportError}</p>}
+                    </div>
+                    <div className="space-y-2">
+                      <label htmlFor="project-name-import" className="text-sm font-medium text-text-secondary">
+                        Workspace Title
+                      </label>
+                      <Input
+                        id="project-name-import"
+                        name="name"
+                        placeholder="Workspace name"
+                        value={newProjectName}
+                        onChange={(e) => setNewProjectName(e.target.value)}
+                        required
+                        disabled={isCreating}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label htmlFor="project-desc-import" className="text-sm font-medium text-text-secondary">
+                        Description <span className="text-text-tertiary">(optional)</span>
+                      </label>
+                      <Input
+                        id="project-desc-import"
+                        name="description"
+                        placeholder="What's this workspace about?"
+                        value={newProjectDesc}
+                        onChange={(e) => setNewProjectDesc(e.target.value)}
+                        disabled={isCreating}
+                      />
+                    </div>
+                  </>
+                )}
+              </motion.div>
+            </AnimatePresence>
+
+            {createMode === "import" && localImportError && (
+              <p className="text-sm text-error">{localImportError}</p>
+            )}
+
+            {createState?.error && lastSubmitMode === createMode && (
+              <p className="text-sm text-error">{createState.error}</p>
+            )}
+
             <DialogFooter>
-              <Button variant="ghost" type="button" onClick={() => setShowNewProject(false)} disabled={isCreating}>
+              <Button
+                variant="ghost"
+                type="button"
+                onClick={() => setShowNewProject(false)}
+                disabled={isCreating}
+              >
                 Cancel
               </Button>
-              <Button type="submit" disabled={!newProjectName.trim() || isCreating}>
-                {isCreating ? "Creating..." : "Create workspace"}
+              <Button
+                type="submit"
+                disabled={
+                  !newProjectName.trim() ||
+                  isCreating ||
+                  (createMode === "github" && !githubUrl.trim()) ||
+                  (createMode === "import" && !importFileStates)
+                }
+              >
+                {isCreating
+                  ? "Creating..."
+                  : createMode === "github"
+                    ? "Clone & Create"
+                    : createMode === "import"
+                      ? "Import & Create"
+                      : "Create Workspace"}
               </Button>
             </DialogFooter>
           </form>

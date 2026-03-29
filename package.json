@@ -5,5 +5,8 @@
   "workspaces": [
     "apps/*"
   ],
-  "packageManager": "yarn@4.13.0"
+  "packageManager": "yarn@4.13.0",
+  "devDependencies": {
+    "node-gyp": "^12.2.0"
+  }
 }

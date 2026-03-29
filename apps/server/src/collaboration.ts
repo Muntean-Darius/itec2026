@@ -22,43 +22,22 @@ import * as awarenessProtocol from "y-protocols/awareness"
 import { loadLatestSnapshot } from "./snapshot-store.js"
 import { streamAIChat, mergeWithAI } from "./ai.js"
 import type { FileOperation, ChatMessage } from "./ai.js"
-
-// ─── Fake Terminal Responses ─────────────────────────────────────────────
-
-const FAKE_RESPONSES: Record<string, string> = {
-  help: "Available commands: help, ls, pwd, echo, whoami, date, clear, node, npm, git, cat",
-  ls: "src/  node_modules/  package.json  tsconfig.json  README.md",
-  pwd: "/home/itecify/workspace",
-  whoami: "itecify-user",
-  date: new Date().toUTCString(),
-  clear: "",
-  "node --version": "v22.11.0",
-  "npm --version": "10.9.2",
-  "git status": "On branch main\nnothing to commit, working tree clean",
-  "git log --oneline": "a1b2c3d feat: initial commit\nd4e5f6g docs: add README",
-  "npm run build": "> itecify@1.0.0 build\n> next build\n\n ✓ Compiled successfully\n ✓ Linting and checking validity\n ✓ Collecting page data\n ✓ Generating static pages\n ✓ Finalizing page optimization\n\nRoute (app)    Size     First Load JS\n┌ ○ /          5.2 kB   89.1 kB\n└ ○ /dashboard 3.1 kB   87.0 kB\n\n✓ Build completed in 4.2s",
-  "npm test": "> itecify@1.0.0 test\n> jest\n\n PASS  src/__tests__/utils.test.ts\n PASS  src/__tests__/api.test.ts\n\nTest Suites: 2 passed, 2 total\nTests:       12 passed, 12 total\nTime:        1.847s",
-  "npm install": "added 0 packages, audited 847 packages in 2s\n\n0 vulnerabilities",
-}
-
-function getFakeResponse(input: string): string {
-  const trimmed = input.trim().toLowerCase()
-
-  // Direct match
-  if (FAKE_RESPONSES[trimmed] !== undefined) return FAKE_RESPONSES[trimmed]
-
-  // echo command
-  if (trimmed.startsWith("echo ")) return input.trim().slice(5)
-
-  // cat command
-  if (trimmed.startsWith("cat ")) {
-    const file = trimmed.slice(4).trim()
-    return `cat: ${file}: simulated file contents would appear here`
-  }
-
-  // Fallback
-  return `command not found: ${input.trim().split(" ")[0]}\nTry 'help' for available commands.`
-}
+import {
+  ensureContainer,
+  getContainerStatusInfo,
+  destroyContainer,
+  resetContainer,
+  executeCommand,
+  getSessionCwd,
+  onContainerStatus,
+  onContainerStats,
+  getContainerStats,
+  startFileSync,
+  stopFileSync,
+  syncBeforeCommand,
+  syncAfterCommand,
+  type ContainerStatus,
+} from "./docker-manager.js"
 
 // ─── Types ───────────────────────────────────────────────────────────────
 
@@ -155,19 +134,66 @@ function getOrCreateRoom(projectId: string, io?: SocketIOServer): ProjectRoom {
 /**
  * Load the latest snapshot from DB into the room's Yjs doc.
  * Called once when the first user joins a room.
+ *
+ * Handles two blob formats:
+ * - Server cron snapshots: blob is a real Yjs state vector (Y.encodeStateAsUpdate)
+ * - Client snapshots: blob is JSON.stringify(fileStates) — NOT a valid Yjs update
+ *
+ * When the blob is invalid, falls back to reconstructing the doc from fileStates.
  */
 const loadedRooms = new Set<string>()
 async function ensureSnapshotLoaded(projectId: string, room: ProjectRoom) {
   if (loadedRooms.has(projectId)) return
   loadedRooms.add(projectId)
   try {
-    const snapshot = await loadLatestSnapshot(projectId)
-    if (snapshot && snapshot.byteLength > 0) {
-      Y.applyUpdate(room.doc, snapshot)
-      console.log(`[iTECify] Loaded snapshot for ${projectId} (${snapshot.byteLength} bytes)`)
-    } else {
+    const result = await loadLatestSnapshot(projectId)
+    if (!result) {
       console.log(`[iTECify] No snapshot found for ${projectId} — starting fresh`)
+      return
     }
+
+    const { blob, fileStates } = result
+
+    // Detect whether the blob is a real Yjs binary update or a client-created
+    // JSON blob (Buffer.from(JSON.stringify(fileStates))).  A Yjs update starts
+    // with a struct-count varint; a JSON blob starts with '{' (0x7B) or '['.
+    // Applying a JSON blob to Y.applyUpdate may silently corrupt the doc without
+    // throwing, so we must detect and skip it.
+    const isLikelyJsonBlob = blob.byteLength > 0 && (blob[0] === 0x7B || blob[0] === 0x5B) // '{' or '['
+
+    // Try applying the blob as a Yjs state update (only if it looks like a real Yjs binary)
+    if (blob.byteLength > 0 && !isLikelyJsonBlob) {
+      try {
+        Y.applyUpdate(room.doc, blob)
+        console.log(`[iTECify] Loaded Yjs snapshot for ${projectId} (${blob.byteLength} bytes)`)
+        return
+      } catch (err) {
+        console.warn(`[iTECify] Yjs blob invalid for ${projectId}, falling back to fileStates:`, (err as Error).message)
+      }
+    } else if (isLikelyJsonBlob) {
+      console.log(`[iTECify] Snapshot blob for ${projectId} is JSON (client-created), using fileStates instead`)
+    }
+
+    // Reconstruct the doc from fileStates (handles client-created snapshots
+    // where the blob is JSON text instead of a Yjs binary update)
+    if (fileStates && typeof fileStates === "object") {
+      const filesMap = room.doc.getMap("files")
+      room.doc.transact(() => {
+        for (const [path, content] of Object.entries(fileStates)) {
+          if (typeof content === "string") {
+            // Normalize path: strip leading slash to match client convention
+            const normalizedPath = path.startsWith("/") ? path.slice(1) : path
+            const ytext = new Y.Text()
+            ytext.insert(0, content)
+            filesMap.set(normalizedPath, ytext)
+          }
+        }
+      }, "server")
+      console.log(`[iTECify] Reconstructed ${Object.keys(fileStates).length} files from fileStates for ${projectId}`)
+      return
+    }
+
+    console.log(`[iTECify] No usable snapshot data for ${projectId} — starting fresh`)
   } catch (err) {
     console.error(`[iTECify] Failed to load snapshot for ${projectId}:`, err)
   }
@@ -176,7 +202,7 @@ async function ensureSnapshotLoaded(projectId: string, room: ProjectRoom) {
 // ─── Snapshot Saving ─────────────────────────────────────────────────────
 
 interface SnapshotStore {
-  save: (projectId: string, blob: Uint8Array, userId: string) => Promise<void>
+  save: (projectId: string, blob: Uint8Array, userId: string, options?: { fileStates?: Record<string, string> }) => Promise<void>
 }
 
 let snapshotStore: SnapshotStore | null = null
@@ -194,9 +220,19 @@ async function saveSnapshot(projectId: string, room: ProjectRoom) {
   try {
     const blob = Y.encodeStateAsUpdate(room.doc)
     const userId = room.users.values().next().value?.userId ?? "system"
-    await snapshotStore.save(projectId, blob, userId)
+
+    // Extract file states from the Yjs doc for time-travel preview
+    const filesMap = room.doc.getMap("files")
+    const fileStates: Record<string, string> = {}
+    filesMap.forEach((value: unknown, key: string) => {
+      if (value && typeof (value as { toString(): string }).toString === "function") {
+        fileStates[key] = (value as { toString(): string }).toString()
+      }
+    })
+
+    await snapshotStore.save(projectId, blob, userId, { fileStates })
     room.lastSnapshotAt = Date.now()
-    console.log(`[iTECify] Snapshot saved for ${projectId} (${blob.byteLength} bytes)`)
+    console.log(`[iTECify] Snapshot saved for ${projectId} (${blob.byteLength} bytes, ${Object.keys(fileStates).length} files)`)
   } catch (err) {
     console.error(`[iTECify] Snapshot save failed for ${projectId}:`, err)
   }
@@ -215,6 +251,16 @@ function startSnapshotTimer(projectId: string, room: ProjectRoom) {
 // ─── Socket.IO Setup ─────────────────────────────────────────────────────
 
 export function setupCollaboration(io: SocketIOServer) {
+  // Broadcast Docker container status changes to all clients in the relevant room
+  onContainerStatus((projectId, info) => {
+    io.to(`project:${projectId}`).emit("docker-status", info)
+  })
+
+  // Broadcast Docker container stats to all clients in the relevant room
+  onContainerStats((projectId, stats) => {
+    io.to(`project:${projectId}`).emit("docker-stats", stats)
+  })
+
   io.on("connection", (socket: Socket) => {
     let currentProjectId: string | null = null
     let currentRoom: ProjectRoom | null = null
@@ -290,6 +336,85 @@ export function setupCollaboration(io: SocketIOServer) {
 
       // Start snapshot timer for this room
       startSnapshotTimer(projectId, currentRoom)
+
+      // ── Docker container: send current status then start if needed ──
+      const existingInfo = getContainerStatusInfo(projectId)
+      if (existingInfo) {
+        socket.emit("docker-status", existingInfo)
+      } else {
+        socket.emit("docker-status", { status: "creating" })
+      }
+
+      // Send cached stats if available
+      const cachedStats = getContainerStats(projectId)
+      if (cachedStats) {
+        socket.emit("docker-stats", cachedStats)
+      }
+
+      // Spin up Docker container in the background (no-op if already exists)
+      const room = currentRoom
+      const filesMap = room.doc.getMap("files")
+      const fileEntries = new Map<string, string>()
+      filesMap.forEach((value: unknown, key: string) => {
+        if (value && typeof (value as { toString(): string }).toString === "function") {
+          fileEntries.set(key, (value as { toString(): string }).toString())
+        }
+      })
+      ensureContainer(projectId, fileEntries)
+        .then(() => {
+          // Start bidirectional file sync once container is ready
+          startFileSync(projectId, {
+            getFiles: () => {
+              const files = new Map<string, string>()
+              const fMap = room.doc.getMap("files")
+              fMap.forEach((value: unknown, key: string) => {
+                if (value && typeof (value as { toString(): string }).toString === "function") {
+                  // Normalize: strip leading slash to match container paths
+                  const normalizedKey = key.startsWith("/") ? key.slice(1) : key
+                  files.set(normalizedKey, (value as { toString(): string }).toString())
+                }
+              })
+              return files
+            },
+            applyContainerChanges: (containerFiles: Map<string, string>) => {
+              const fMap = room.doc.getMap("files")
+              room.doc.transact(() => {
+                for (const [filePath, content] of containerFiles) {
+                  // Try both with and without leading slash
+                  let existing = fMap.get(filePath)
+                  let actualKey = filePath
+                  if (!(existing instanceof Y.Text)) {
+                    existing = fMap.get("/" + filePath) as unknown
+                    if (existing instanceof Y.Text) actualKey = "/" + filePath
+                  }
+                  if (existing instanceof Y.Text) {
+                    const currentContent = existing.toString()
+                    if (currentContent !== content) {
+                      existing.delete(0, existing.length)
+                      existing.insert(0, content)
+                    }
+                  } else {
+                    const ytext = new Y.Text()
+                    ytext.insert(0, content)
+                    fMap.set(filePath, ytext)
+                  }
+                }
+              }, "server")
+            },
+            removeFiles: (paths: string[]) => {
+              const fMap = room.doc.getMap("files")
+              room.doc.transact(() => {
+                for (const p of paths) {
+                  fMap.delete(p)
+                  fMap.delete("/" + p)
+                }
+              }, "server")
+            },
+          })
+        })
+        .catch((err) => {
+          console.error(`[iTECify] Docker container creation failed for ${projectId}:`, err)
+        })
     })
 
     // ── Yjs sync messages ──
@@ -347,8 +472,8 @@ export function setupCollaboration(io: SocketIOServer) {
       })
     })
 
-    // ── Terminal input (multi-session) ──
-    socket.on("terminal-input", (msg: { sessionId: string; content: string; userId: string }) => {
+    // ── Terminal input (multi-session, Docker exec) ──
+    socket.on("terminal-input", async (msg: { sessionId: string; content: string; userId: string }) => {
       if (!currentRoom || !currentProjectId) return
 
       const terminalsMap = currentRoom.doc.getMap("terminals")
@@ -358,34 +483,131 @@ export function setupCollaboration(io: SocketIOServer) {
       const linesArr = sessionMap.get("lines")
       if (!linesArr || !(linesArr instanceof Y.Array)) return
 
+      const room = currentRoom
+      const projectId = currentProjectId
+      const roomName = `project:${projectId}`
+
+      // Get the current working directory for this session before executing
+      const stdinCwd = getSessionCwd(projectId, msg.sessionId)
+
       const stdinLine = {
         id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         type: "stdin" as const,
         content: msg.content,
         timestamp: new Date().toISOString(),
         userId: msg.userId,
+        cwd: stdinCwd,
       }
 
-      const response = getFakeResponse(msg.content)
-
-      currentRoom.doc.transact(() => {
+      // Push the stdin line & clear shared input immediately
+      room.doc.transact(() => {
         linesArr.push([stdinLine])
-
-        if (response) {
-          linesArr.push([{
-            id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            type: "stdout" as const,
-            content: response,
-            timestamp: new Date().toISOString(),
-          }])
-        }
-
-        // Clear the shared input Y.Text after command submission
         const inputText = sessionMap.get("input")
         if (inputText instanceof Y.Text && inputText.length > 0) {
           inputText.delete(0, inputText.length)
         }
       }, "server")
+
+      // Notify all clients that this terminal session is busy
+      io.to(roomName).emit("terminal-busy", { sessionId: msg.sessionId, busy: true })
+
+      // Sync Yjs files → container before executing the command
+      await syncBeforeCommand(projectId)
+
+      // Execute command in Docker container
+      const { output, exitCode, cwd } = await executeCommand(projectId, msg.sessionId, msg.content)
+
+      if (output) {
+        const lineType = (exitCode !== null && exitCode !== 0) ? "stderr" as const : "stdout" as const
+        room.doc.transact(() => {
+          linesArr.push([{
+            id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            type: lineType,
+            content: output,
+            timestamp: new Date().toISOString(),
+          }])
+        }, "server")
+      }
+
+      // After command, merge container file changes back into Yjs (additive, not destructive)
+      await syncAfterCommand(projectId)
+
+      // Notify all clients that this terminal session is done + new cwd
+      io.to(roomName).emit("terminal-busy", { sessionId: msg.sessionId, busy: false, cwd })
+    })
+
+    // ── Container Reset ──────────────────────────────────────────────────
+    socket.on("container-reset", async () => {
+      if (!currentRoom || !currentProjectId) return
+      const projectId = currentProjectId
+      const room = currentRoom
+      const roomName = `project:${projectId}`
+
+      console.log(`[iTECify] Container reset requested for ${projectId}`)
+
+      // Gather current Yjs file state
+      const filesMap = room.doc.getMap("files")
+      const fileEntries = new Map<string, string>()
+      filesMap.forEach((value: unknown, key: string) => {
+        if (value && typeof (value as { toString(): string }).toString === "function") {
+          const normalizedKey = key.startsWith("/") ? key.slice(1) : key
+          fileEntries.set(normalizedKey, (value as { toString(): string }).toString())
+        }
+      })
+
+      // Reset (destroy + recreate) the container
+      await resetContainer(projectId, fileEntries)
+
+      // Restart file sync
+      startFileSync(projectId, {
+        getFiles: () => {
+          const files = new Map<string, string>()
+          const fMap = room.doc.getMap("files")
+          fMap.forEach((value: unknown, key: string) => {
+            if (value && typeof (value as { toString(): string }).toString === "function") {
+              const normalizedKey = key.startsWith("/") ? key.slice(1) : key
+              files.set(normalizedKey, (value as { toString(): string }).toString())
+            }
+          })
+          return files
+        },
+        applyContainerChanges: (containerFiles: Map<string, string>) => {
+          const fMap = room.doc.getMap("files")
+          room.doc.transact(() => {
+            for (const [filePath, content] of containerFiles) {
+              let existing = fMap.get(filePath)
+              let actualKey = filePath
+              if (!(existing instanceof Y.Text)) {
+                existing = fMap.get("/" + filePath) as unknown
+                if (existing instanceof Y.Text) actualKey = "/" + filePath
+              }
+              if (existing instanceof Y.Text) {
+                const currentContent = existing.toString()
+                if (currentContent !== content) {
+                  existing.delete(0, existing.length)
+                  existing.insert(0, content)
+                }
+              } else {
+                const ytext = new Y.Text()
+                ytext.insert(0, content)
+                fMap.set(filePath, ytext)
+              }
+            }
+          }, "server")
+        },
+        removeFiles: (paths: string[]) => {
+          const fMap = room.doc.getMap("files")
+          room.doc.transact(() => {
+            for (const p of paths) {
+              fMap.delete(p)
+              fMap.delete("/" + p)
+            }
+          }, "server")
+        },
+      })
+
+      // Reset terminal cwds for all clients
+      io.to(roomName).emit("terminal-busy", { sessionId: "__all__", busy: false, cwd: "/home/itecify/workspace" })
     })
 
     // ── AI Chat ──────────────────────────────────────────────────────────
@@ -796,6 +1018,28 @@ export function setupCollaboration(io: SocketIOServer) {
       }, "server")
     })
 
+    // ── Snapshot broadcast (time-travel sync across clients) ──────────
+    socket.on("snapshot-created", (msg: {
+      snapshot: {
+        id: string
+        projectId: string
+        createdAt: string
+        label: string | null
+        changeCount: number
+        userId: string
+        kind: string
+        promptSummary?: string
+        filePath?: string
+        fileStates?: Record<string, string>
+        userName?: string
+      }
+    }) => {
+      if (!currentProjectId) return
+      const roomName = `project:${currentProjectId}`
+      // Broadcast to all OTHER clients in the room so their timelines stay in sync
+      socket.to(roomName).emit("snapshot-created", msg)
+    })
+
     // ── Disconnect ──
     socket.on("disconnect", () => {
       if (currentProjectId && currentRoom) {
@@ -827,5 +1071,17 @@ function leaveRoom(socket: Socket, projectId: string, room: ProjectRoom) {
   // Save a snapshot when a user leaves (if there were changes)
   if (room.lastChangeAt > room.lastSnapshotAt) {
     saveSnapshot(projectId, room)
+  }
+
+  // If all users left, schedule Docker container cleanup
+  if (room.users.size === 0) {
+    setTimeout(() => {
+      const currentRoom = rooms.get(projectId)
+      if (currentRoom && currentRoom.users.size === 0) {
+        destroyContainer(projectId).catch((err) => {
+          console.warn(`[iTECify] Docker cleanup failed for ${projectId}:`, err)
+        })
+      }
+    }, 5 * 60 * 1000) // Keep container alive 5 min after last user leaves
   }
 }

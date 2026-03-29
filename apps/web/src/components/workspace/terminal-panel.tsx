@@ -1,14 +1,15 @@
 "use client"
 
 import { useRef, useEffect, useState, useCallback } from "react"
-import { Terminal as TermIcon, Plus, X } from "lucide-react"
+import { Terminal as TermIcon, Plus, X, RotateCcw } from "lucide-react"
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
+import { toast } from "sonner"
 import type { TerminalLine, PresenceUser } from "@/data/types"
-import type { TerminalSession } from "@/lib/collaboration"
+import type { TerminalSession, DockerStatus } from "@/lib/collaboration"
 
 interface TerminalPanelProps {
-  isRunning: boolean
   sessions: TerminalSession[]
   activeSessionId: string | null
   onSelectSession: (id: string) => void
@@ -23,10 +24,26 @@ interface TerminalPanelProps {
   presenceUsers?: PresenceUser[]
   /** Current user's ID */
   currentUserId?: string
+  /** Docker container status */
+  dockerStatus?: DockerStatus
+  /** Docker error message */
+  dockerError?: string | null
+  /** Per-session busy state (command is running) */
+  terminalBusy?: Record<string, boolean>
+  /** Per-session current working directory */
+  terminalCwds?: Record<string, string>
+  /** Callback to reset the Docker container */
+  onResetContainer?: () => void
+}
+
+/** Format cwd for display: replace /home/itecify/workspace with ~ */
+function formatCwd(cwd: string): string {
+  return cwd
+    .replace(/^\/home\/itecify\/workspace\/?/, "~/workspace/")
+    .replace(/\/$/, "") || "~"
 }
 
 export function TerminalPanel({
-  isRunning,
   sessions,
   activeSessionId,
   onSelectSession,
@@ -37,6 +54,11 @@ export function TerminalPanel({
   awareness,
   presenceUsers = [],
   currentUserId,
+  dockerStatus,
+  dockerError,
+  terminalBusy = {},
+  terminalCwds = {},
+  onResetContainer,
 }: TerminalPanelProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -46,9 +68,27 @@ export function TerminalPanel({
   const [lastSeenLines, setLastSeenLines] = useState<Record<string, number>>({})
   // Track unread counts for badge
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({})
+  // Command history per session
+  const [commandHistory, setCommandHistory] = useState<Record<string, string[]>>({})
+  const [historyIndex, setHistoryIndex] = useState<number>(-1)
+  // Stash the current input when browsing history
+  const historyStash = useRef<string>("")
+
+  const isSessionBusy = activeSessionId ? (terminalBusy[activeSessionId] ?? false) : false
+  const sessionCwd = activeSessionId ? (terminalCwds[activeSessionId] ?? "/home/itecify/workspace") : ""
 
   const activeSession = sessions.find((s) => s.id === activeSessionId)
   const lines: TerminalLine[] = activeSession?.lines ?? []
+
+  // Show toast on Docker error
+  useEffect(() => {
+    if (dockerStatus === "error" && dockerError) {
+      toast.error("Docker Container Error", {
+        description: dockerError,
+        duration: 10_000,
+      })
+    }
+  }, [dockerStatus, dockerError])
 
   // Mark current session as read when viewing
   useEffect(() => {
@@ -103,7 +143,7 @@ export function TerminalPanel({
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [lines, isRunning])
+  }, [lines, isSessionBusy])
 
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const newValue = e.target.value
@@ -141,8 +181,21 @@ export function TerminalPanel({
   }, [inputYText, awareness, activeSessionId])
 
   const handleInputKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    const sessionId = activeSessionId
+    if (!sessionId) return
+    const history = commandHistory[sessionId] ?? []
+
     if (e.key === "Enter" && inputValue.trim()) {
-      onInput?.(inputValue.trim())
+      const cmd = inputValue.trim()
+      // Add to command history
+      setCommandHistory((prev) => {
+        const sessionHist = prev[sessionId] ?? []
+        return { ...prev, [sessionId]: [...sessionHist, cmd] }
+      })
+      setHistoryIndex(-1)
+      historyStash.current = ""
+
+      onInput?.(cmd)
       setInputValue("")
       // Clear Y.Text
       if (inputYText) {
@@ -154,8 +207,51 @@ export function TerminalPanel({
         }
         suppressYTextSync.current = false
       }
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault()
+      if (history.length === 0) return
+      const newIndex = historyIndex === -1 ? history.length - 1 : Math.max(0, historyIndex - 1)
+      if (historyIndex === -1) {
+        // Stash current input before browsing
+        historyStash.current = inputValue
+      }
+      setHistoryIndex(newIndex)
+      const histCmd = history[newIndex] ?? ""
+      setInputValue(histCmd)
+      syncInputToYText(histCmd)
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault()
+      if (historyIndex === -1) return
+      const newIndex = historyIndex + 1
+      if (newIndex >= history.length) {
+        // Restore stashed input
+        setHistoryIndex(-1)
+        setInputValue(historyStash.current)
+        syncInputToYText(historyStash.current)
+      } else {
+        setHistoryIndex(newIndex)
+        const histCmd = history[newIndex] ?? ""
+        setInputValue(histCmd)
+        syncInputToYText(histCmd)
+      }
     }
-  }, [inputValue, onInput, inputYText])
+  }, [inputValue, onInput, inputYText, activeSessionId, commandHistory, historyIndex])
+
+  /** Helper: sync a value to Y.Text */
+  const syncInputToYText = useCallback((value: string) => {
+    if (!inputYText) return
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const yt = inputYText as any
+    suppressYTextSync.current = true
+    const current = yt.toString()
+    if (current !== value) {
+      yt.doc.transact(() => {
+        if (yt.length > 0) yt.delete(0, yt.length)
+        if (value) yt.insert(0, value)
+      })
+    }
+    suppressYTextSync.current = false
+  }, [inputYText])
 
   const handleInputClick = useCallback(() => {
     if (awareness && activeSessionId && inputRef.current) {
@@ -210,17 +306,15 @@ export function TerminalPanel({
                     {unread}
                   </span>
                 )}
-                {sessions.length > 1 && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onDeleteSession(session.id)
-                    }}
-                    className="ml-0.5 rounded-sm opacity-0 transition-opacity group-hover:opacity-100 hover:bg-active"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                )}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onDeleteSession(session.id)
+                  }}
+                  className="ml-0.5 rounded-sm opacity-0 transition-opacity group-hover:opacity-100 hover:bg-active"
+                >
+                  <X className="h-3 w-3" />
+                </button>
               </div>
             )
           })}
@@ -234,7 +328,27 @@ export function TerminalPanel({
           </button>
         </div>
 
-        {isRunning && (
+        {/* Reset container button */}
+        {onResetContainer && dockerStatus === "ready" && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => {
+                  if (confirm("Reset the Docker container? This will destroy the current environment and recreate it from your files.")) {
+                    onResetContainer()
+                  }
+                }}
+                className="flex items-center justify-center rounded-md p-1 text-text-tertiary transition-colors hover:bg-hover hover:text-warning"
+                title="Reset container"
+              >
+                <RotateCcw className="h-3 w-3" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Reset Docker container</TooltipContent>
+          </Tooltip>
+        )}
+
+        {isSessionBusy && (
           <span className="ml-auto flex items-center gap-1.5 pr-2">
             <span className="relative flex h-2 w-2">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-75" />
@@ -243,10 +357,74 @@ export function TerminalPanel({
             <span className="text-xs text-success">Running</span>
           </span>
         )}
+
+        {!isSessionBusy && dockerStatus && dockerStatus !== "ready" && (
+          <span className="ml-auto flex items-center gap-1.5 pr-2">
+            {dockerStatus === "creating" && (
+              <>
+                <span className="relative flex h-2 w-2">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-warning opacity-75" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-warning" />
+                </span>
+                <span className="text-xs text-warning">Docker starting...</span>
+              </>
+            )}
+            {dockerStatus === "error" && (
+              <>
+                <span className="relative flex h-2 w-2">
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-error" />
+                </span>
+                <span className="text-xs text-error">Docker error</span>
+              </>
+            )}
+          </span>
+        )}
+
+        {!isSessionBusy && dockerStatus === "ready" && (
+          <span className="ml-auto flex items-center gap-1.5 pr-2">
+            <span className="relative flex h-2 w-2">
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-success" />
+            </span>
+            <span className="text-xs text-success">Docker ready</span>
+          </span>
+        )}
       </div>
 
+      {/* Docker loading overlay */}
+      {dockerStatus && dockerStatus !== "ready" && activeSession && (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-text-tertiary">
+          {dockerStatus === "creating" && (
+            <>
+              <div className="flex items-center gap-2">
+                <svg className="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                <span className="text-sm font-medium">Starting Docker instance...</span>
+              </div>
+              <span className="text-xs text-text-tertiary">
+                Your workspace container is being prepared. This usually takes a few seconds.
+              </span>
+            </>
+          )}
+          {dockerStatus === "error" && (
+            <>
+              <span className="text-sm font-medium text-error">Docker instance failed to start</span>
+              {dockerError && (
+                <code className="max-w-md rounded-md bg-elevated px-3 py-2 text-xs text-error/80 break-all">
+                  {dockerError}
+                </code>
+              )}
+              <span className="text-xs text-text-tertiary">
+                Try refreshing the page. If the problem persists, contact support.
+              </span>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Terminal output for active session */}
-      {activeSession ? (
+      {dockerStatus === "ready" && activeSession ? (
         <ScrollArea
           className="flex-1 font-mono text-xs"
           onClick={() => inputRef.current?.focus()}
@@ -266,25 +444,23 @@ export function TerminalPanel({
                   )}
                 >
                   {line.type === "stdin" && (
-                    <span className="text-text-tertiary">$ </span>
+                    <span className="text-text-tertiary">{line.cwd ? formatCwd(line.cwd) + " $ " : "$ "}</span>
                   )}
                   {line.content}
                 </div>
               )
             })}
 
-            {isRunning && (
-              <div className="mt-1 flex items-center gap-2">
-                <span className="text-text-tertiary">$</span>
-                <span className="text-ai">Scanning for vulnerabilities...</span>
+            {isSessionBusy && (
+              <div className="mt-1">
                 <span className="inline-block animate-pulse text-text-tertiary">▊</span>
               </div>
             )}
 
-            {!isRunning && (
+            {!isSessionBusy && (
               <div className="relative">
                 <div className="flex items-center gap-1">
-                  <span className="text-text-tertiary">~/itecify $&nbsp;</span>
+                  <span className="text-text-tertiary shrink-0">{formatCwd(sessionCwd)} $&nbsp;</span>
                   <div className="relative flex-1">
                     <input
                       ref={inputRef}

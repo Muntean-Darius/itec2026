@@ -19,6 +19,9 @@ import {
   CheckCheck,
   Trash2,
   ClipboardCopy,
+  FolderTree,
+  Search,
+  FolderGit2,
 } from "lucide-react"
 import Link from "next/link"
 import type { User, Project, FileNode, PresenceUser, AIAgent, Snapshot } from "@/data/types"
@@ -28,6 +31,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip
 import { Separator } from "@/components/ui/separator"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { ResizeHandle } from "@/components/ui/resize-handle"
 import { PresenceDock } from "./presence-dock"
 import { FileTree, getFileIcon } from "./file-tree"
@@ -38,7 +42,12 @@ import { TimeTravelSlider } from "./time-travel-slider"
 import { AgentRoster } from "./agent-roster"
 import { AIInlinePrompt } from "./ai-inline-prompt"
 import { AIPanel } from "./ai-panel"
-import { NewFileDialog } from "./new-file-dialog"
+import { SourceControlPanel } from "./source-control-panel"
+import { SearchPanel } from "./search-panel"
+import { BranchSelector } from "./branch-selector"
+import { SyncIndicator } from "./sync-indicator"
+import { DiffViewer } from "./diff-viewer"
+import { GitProvider, useGitOptional } from "@/lib/git"
 import { useCollaboration } from "@/lib/collaboration"
 import { cn } from "@/lib/utils"
 import { getWorkspaceInviteUrl } from "@/lib/workspace-share"
@@ -50,6 +59,10 @@ interface WorkspaceShellProps {
   currentUser: User
   agents: AIAgent[]
   snapshots: Snapshot[]
+  initialGitCredentials?: {
+    username: string
+    password: string
+  }
 }
 
 // Size constraints
@@ -58,7 +71,7 @@ const SIDEBAR_MAX = 400
 const SIDEBAR_DEFAULT = 260
 const TERMINAL_MIN = 80
 const TERMINAL_MAX = 500
-const TERMINAL_DEFAULT = 220
+const TERMINAL_DEFAULT = 300
 const AGENT_PANEL_MIN = 220
 const AGENT_PANEL_MAX = 400
 const AGENT_PANEL_DEFAULT = AGENT_PANEL_MAX
@@ -70,6 +83,7 @@ export function WorkspaceShell({
   currentUser,
   agents,
   snapshots,
+  initialGitCredentials,
 }: WorkspaceShellProps) {
   // Real-time collaboration
   const collab = useCollaboration({
@@ -99,6 +113,8 @@ export function WorkspaceShell({
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [terminalOpen, setTerminalOpen] = useState(true)
   const [agentRosterOpen, setAgentRosterOpen] = useState(false)
+  const [sidebarTab, setSidebarTab] = useState<"files" | "search" | "git">("files")
+  const [diffViewPath, setDiffViewPath] = useState<string | null>(null)
 
   // Panel sizes (resizable)
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT)
@@ -106,15 +122,15 @@ export function WorkspaceShell({
   const [agentPanelWidth, setAgentPanelWidth] = useState(AGENT_PANEL_DEFAULT)
 
   // Workspace state
-  const [isRunning, setIsRunning] = useState(false)
   const [timeTravelActive, setTimeTravelActive] = useState(false)
   const [timeTravelSnapshot, setTimeTravelSnapshot] = useState<Snapshot | null>(null)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [aiPromptOpen, setAiPromptOpen] = useState(false)
-  const [newFileDialogOpen, setNewFileDialogOpen] = useState(false)
+  const [createFileTrigger, setCreateFileTrigger] = useState(0)
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
   const [linkCopied, setLinkCopied] = useState(false)
   const [tabContextMenu, setTabContextMenu] = useState<{ x: number; y: number; path: string } | null>(null)
+  const [editorRevealLine, setEditorRevealLine] = useState<number | null>(null)
   const shareUrl = typeof window !== "undefined"
     ? getWorkspaceInviteUrl(project.id, window.location.origin)
     : ""
@@ -130,17 +146,31 @@ export function WorkspaceShell({
   const resolveSnapshotFileStates = useCallback(
     (snapshot: Snapshot | null): Record<string, string> | null => {
       if (!snapshot) return null
-      if (snapshot.fileStates) return snapshot.fileStates
 
-      const idx = timelineSnapshots.findIndex((s) => s.id === snapshot.id)
-      if (idx === -1) return null
-
-      for (let i = idx - 1; i >= 0; i--) {
-        if (timelineSnapshots[i].fileStates) {
-          return timelineSnapshots[i].fileStates ?? null
+      // Find raw fileStates from the snapshot or walk back through timeline
+      let raw = snapshot.fileStates
+      if (!raw) {
+        const idx = timelineSnapshots.findIndex((s) => s.id === snapshot.id)
+        if (idx === -1) return null
+        for (let i = idx - 1; i >= 0; i--) {
+          if (timelineSnapshots[i].fileStates) {
+            raw = timelineSnapshots[i].fileStates
+            break
+          }
         }
       }
-      return null
+      if (!raw) return null
+
+      // Normalize all keys to have a leading "/" so they match the convention
+      // used by syncFilesFromDoc, buildTree, and the rest of the UI.
+      // Server cron snapshots store keys WITHOUT "/" (raw Yjs map keys),
+      // while client snapshots store keys WITH "/".
+      const normalized: Record<string, string> = {}
+      for (const [path, content] of Object.entries(raw)) {
+        const key = path.startsWith("/") ? path : "/" + path
+        normalized[key] = content
+      }
+      return normalized
     },
     [timelineSnapshots]
   )
@@ -176,9 +206,25 @@ export function WorkspaceShell({
 
   // Recent AI accepts for quick-undo (expires after 15 seconds)
   const [recentAIAccepts, setRecentAIAccepts] = useState<RecentAIAccept[]>([])
-  
+
   // Recent AI undos for redo (expires after 15 seconds)
   const [recentAIUndos, setRecentAIUndos] = useState<RecentAIUndo[]>([])
+
+  // Listen for snapshot broadcasts from other clients
+  useEffect(() => {
+    const unsub = collab.onSnapshotCreated((data: { snapshot: Record<string, unknown> }) => {
+      const snap = data.snapshot as unknown as Snapshot
+      if (!snap?.id) return
+      setTimelineSnapshots((prev) => {
+        // Skip if we already have this snapshot
+        if (prev.some((s) => s.id === snap.id)) return prev
+        return [...prev, snap].sort(
+          (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+        )
+      })
+    })
+    return unsub
+  }, [collab])
 
   // Cleanup expired accepts and undos periodically
   useEffect(() => {
@@ -283,11 +329,22 @@ export function WorkspaceShell({
 
   const handleOpenFile = useCallback(
     (path: string) => {
-      setActiveFilePath(path)
-      setOpenFiles((prev) => (prev.includes(path) ? prev : [...prev, path]))
-      collab.updateAwareness({ activeFile: path })
+      // Normalize: ensure leading "/" to match UI convention
+      const normalized = path.startsWith("/") ? path : "/" + path
+      setActiveFilePath(normalized)
+      setOpenFiles((prev) => (prev.includes(normalized) ? prev : [...prev, normalized]))
+      collab.updateAwareness({ activeFile: normalized })
     },
     [collab]
+  )
+
+  // Navigate to a specific file + line (used by Search panel)
+  const handleNavigateTo = useCallback(
+    (path: string, line: number) => {
+      handleOpenFile(path)
+      setEditorRevealLine(line)
+    },
+    [handleOpenFile]
   )
 
   const handleCloseTab = useCallback(
@@ -312,10 +369,12 @@ export function WorkspaceShell({
     [collab, handleCloseTab]
   )
 
+  const isRunning = activeTerminalId ? (collab.terminalBusy[activeTerminalId] ?? false) : false
+
   const handleRun = useCallback(() => {
-    setIsRunning(true)
     setTerminalOpen(true)
-    setTimeout(() => setIsRunning(false), 3000)
+    // Focus the terminal input — the actual command runs via terminal input
+    // This button just ensures the terminal is visible
   }, [])
 
   const handleCreateFile = useCallback(
@@ -349,6 +408,7 @@ export function WorkspaceShell({
         label: opts?.label ?? null,
         changeCount: 1,
         userId: currentUser.id,
+        userName: currentUser.name,
         kind,
         promptSummary: opts?.promptSummary,
         filePath: opts?.filePath ?? (activeFilePath || liveFiles[0]?.path),
@@ -359,6 +419,9 @@ export function WorkspaceShell({
           (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
         )
       )
+
+      // Broadcast to other clients so their timelines stay in sync
+      collab.broadcastSnapshot(snapshot as unknown as Record<string, unknown>)
 
       void createSnapshot({
         projectId: project.id,
@@ -379,7 +442,7 @@ export function WorkspaceShell({
 
       return Promise.resolve(snapshot)
     },
-    [project.id, currentUser.id, activeFilePath, liveFiles, buildCurrentFileStates]
+    [project.id, currentUser.id, currentUser.name, activeFilePath, liveFiles, buildCurrentFileStates, collab]
   )
 
   const handleToggleTimeTravel = useCallback(() => {
@@ -490,12 +553,12 @@ export function WorkspaceShell({
     (accept: RecentAIAccept) => {
       // Revert the file content using the original content
       collab.updateFileContent(accept.filePath, accept.originalContent)
-      
+
       // Remove from recent accepts
       setRecentAIAccepts((prev) =>
         prev.filter((a) => a.messageId !== accept.messageId)
       )
-      
+
       // Add to recent undos for potential redo
       setRecentAIUndos((prev) => [
         ...prev,
@@ -508,7 +571,7 @@ export function WorkspaceShell({
           startLine: accept.startLine,
         },
       ])
-      
+
       // Show toast
       import("sonner").then(({ toast }) => {
         toast.success("AI change reverted")
@@ -522,12 +585,12 @@ export function WorkspaceShell({
     (undo: RecentAIUndo) => {
       // Restore the AI-generated content
       collab.updateFileContent(undo.filePath, undo.newContent)
-      
+
       // Remove from recent undos
       setRecentAIUndos((prev) =>
         prev.filter((u) => u.messageId !== undo.messageId)
       )
-      
+
       // Show toast
       import("sonner").then(({ toast }) => {
         toast.success("AI change restored")
@@ -537,6 +600,16 @@ export function WorkspaceShell({
   )
 
   return (
+    <GitProvider
+      projectId={project.id}
+      ydoc={collab.getYdoc()}
+      Y={collab.getYjs()}
+      initialAuthor={{
+        name: currentUser.name,
+        email: currentUser.email,
+      }}
+      initialCredentials={initialGitCredentials}
+    >
     <div className="flex h-full flex-col bg-background">
       {/* ─── Top Bar ─── */}
       <header className="grid h-11 shrink-0 grid-cols-[1fr_auto_1fr] items-center border-b border-border-subtle px-3">
@@ -655,14 +728,14 @@ export function WorkspaceShell({
               <Button
                 size="sm"
                 variant={isRunning ? "destructive" : "default"}
-                onClick={isRunning ? () => setIsRunning(false) : handleRun}
+                onClick={handleRun}
                 className="h-7 gap-1.5 px-3 text-xs"
-                disabled={!collab.connected && !isRunning}
+                disabled={!collab.connected}
               >
                 {isRunning ? (
                   <>
                     <Square className="h-3 w-3" />
-                    Stop
+                    Running...
                   </>
                 ) : (
                   <>
@@ -672,7 +745,7 @@ export function WorkspaceShell({
                 )}
               </Button>
             </TooltipTrigger>
-            {!collab.connected && !isRunning && (
+            {!collab.connected && (
               <TooltipContent>Server connection required to run code</TooltipContent>
             )}
           </Tooltip>
@@ -680,6 +753,12 @@ export function WorkspaceShell({
 
         {/* Right: Actions + Presence */}
         <div className="flex items-center justify-end gap-2">
+          {/* Git: Branch Selector & Sync */}
+          <BranchSelector />
+          <SyncIndicator />
+
+          <Separator orientation="vertical" className="h-5" />
+
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -730,18 +809,70 @@ export function WorkspaceShell({
           <>
             <aside
               style={{ width: sidebarWidth }}
-              className="shrink-0 overflow-hidden border-r border-border-subtle bg-surface"
+              className="shrink-0 overflow-hidden border-r border-border-subtle bg-surface flex flex-col"
             >
-              <FileTree
-                files={files}
-                activeFilePath={activeFilePath}
-                presence={livePresence}
-                onOpenFile={handleOpenFile}
-                onNewFile={() => setNewFileDialogOpen(true)}
-                onDeleteFile={handleDeleteFile}
-                onRenameFile={(oldPath, newPath) => collab.renameFile(oldPath, newPath)}
-                onCreateFile={handleCreateFile}
-              />
+              {/* Sidebar Tabs */}
+              <Tabs
+                value={sidebarTab}
+                onValueChange={(v) => setSidebarTab(v as "files" | "search" | "git")}
+                className="flex flex-col h-full"
+              >
+                <TabsList className="h-9 shrink-0 rounded-none border-b border-border-subtle bg-transparent p-0 justify-start">
+                  <TabsTrigger
+                    value="files"
+                    className="h-full rounded-none border-b-2 border-transparent data-[state=active]:border-brand data-[state=active]:bg-transparent px-3 text-xs"
+                  >
+                    <FolderTree className="h-3.5 w-3.5 mr-1.5" />
+                    Files
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="search"
+                    className="h-full rounded-none border-b-2 border-transparent data-[state=active]:border-brand data-[state=active]:bg-transparent px-3 text-xs"
+                  >
+                    <Search className="h-3.5 w-3.5 mr-1.5" />
+                    Search
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="git"
+                    className="h-full rounded-none border-b-2 border-transparent data-[state=active]:border-brand data-[state=active]:bg-transparent px-3 text-xs"
+                  >
+                    <FolderGit2 className="h-3.5 w-3.5 mr-1.5" />
+                    Git
+                  </TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="files" className="flex-1 overflow-hidden m-0">
+                  <FileTree
+                    files={files}
+                    activeFilePath={activeFilePath}
+                    presence={livePresence}
+                    onOpenFile={handleOpenFile}
+                    onDeleteFile={handleDeleteFile}
+                    onRenameFile={(oldPath, newPath) => collab.renameFile(oldPath, newPath)}
+                    onCreateFile={handleCreateFile}
+                    createFileTrigger={createFileTrigger}
+                  />
+                </TabsContent>
+
+                <TabsContent value="search" className="flex-1 overflow-hidden m-0">
+                  <SearchPanel
+                    files={files}
+                    onNavigateTo={handleNavigateTo}
+                    onReplaceInFile={(path, search, replacement) => {
+                      const file = files.find((f) => f.path === path)
+                      if (!file) return
+                      const updated = file.content.replace(search, replacement)
+                      collab.updateFileContent(path, updated)
+                    }}
+                  />
+                </TabsContent>
+
+                <TabsContent value="git" className="flex-1 overflow-hidden m-0">
+                  <SourceControlPanel
+                    onViewDiff={(filepath) => setDiffViewPath(filepath)}
+                  />
+                </TabsContent>
+              </Tabs>
             </aside>
             <ResizeHandle
               direction="horizontal"
@@ -785,8 +916,8 @@ export function WorkspaceShell({
                     role="tab"
                     tabIndex={0}
                     aria-selected={isActive}
-                    onClick={() => setActiveFilePath(filePath)}
-                    onKeyDown={(e) => { if (e.key === "Enter") setActiveFilePath(filePath) }}
+                    onClick={() => { setActiveFilePath(filePath); collab.updateAwareness({ activeFile: filePath }) }}
+                    onKeyDown={(e) => { if (e.key === "Enter") { setActiveFilePath(filePath); collab.updateAwareness({ activeFile: filePath }) } }}
                     onContextMenu={(e) => {
                       e.preventDefault()
                       setTabContextMenu({ x: e.clientX, y: e.clientY, path: filePath })
@@ -840,7 +971,7 @@ export function WorkspaceShell({
             {activeFile ? (
               <>
                 <CodeEditor
-                  key={activeFilePath}
+                  key={`${activeFilePath}:${timeTravelActive ? "tt" : "live"}:${collab.getYText(activeFilePath) ? "bound" : "static"}`}
                   file={activeFile}
                   readOnly={timeTravelActive}
                   yText={timeTravelActive ? undefined : collab.getYText(activeFilePath)}
@@ -852,6 +983,7 @@ export function WorkspaceShell({
                   recentUndos={recentAIUndos}
                   onQuickUndo={handleQuickUndo}
                   onQuickRedo={handleQuickRedo}
+                  revealLine={editorRevealLine}
                 />
               </>
             ) : (
@@ -911,7 +1043,6 @@ export function WorkspaceShell({
                 className="shrink-0 overflow-hidden border-t border-border-subtle"
               >
                 <TerminalPanel
-                  isRunning={isRunning}
                   sessions={collab.terminalSessions}
                   activeSessionId={activeTerminalId}
                   onSelectSession={setActiveTerminalId}
@@ -927,6 +1058,11 @@ export function WorkspaceShell({
                   awareness={collab.getAwareness()}
                   presenceUsers={livePresence}
                   currentUserId={currentUser.id}
+                  dockerStatus={collab.dockerStatus}
+                  dockerError={collab.dockerError}
+                  terminalBusy={collab.terminalBusy}
+                  terminalCwds={collab.terminalCwds}
+                  onResetContainer={collab.resetContainer}
                 />
               </div>
             </>
@@ -1047,6 +1183,83 @@ export function WorkspaceShell({
         )}
       </div>
 
+      {/* ─── Status Bar ─── */}
+      <div className="flex h-6 shrink-0 items-center justify-between border-t border-border-subtle bg-surface px-3 text-[11px] text-text-tertiary">
+        <div className="flex items-center gap-3">
+          {collab.dockerStatus === "ready" && (
+            <span className="flex items-center gap-1">
+              <span className="inline-flex h-1.5 w-1.5 rounded-full bg-success" />
+              Docker
+            </span>
+          )}
+          {collab.dockerStatus === "creating" && (
+            <span className="flex items-center gap-1">
+              <span className="inline-flex h-1.5 w-1.5 animate-pulse rounded-full bg-warning" />
+              Docker starting...
+            </span>
+          )}
+          {collab.dockerStatus === "error" && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="flex cursor-help items-center gap-1">
+                  <span className="inline-flex h-1.5 w-1.5 rounded-full bg-error" />
+                  <span className="text-error">Docker error</span>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>{collab.dockerError || "Unknown error"}</TooltipContent>
+            </Tooltip>
+          )}
+          {collab.connected && (
+            <span className="flex items-center gap-1">
+              <span className="inline-flex h-1.5 w-1.5 rounded-full bg-success" />
+              Connected
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          {collab.dockerStats && collab.dockerStatus === "ready" && (
+            <>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="flex items-center gap-1 tabular-nums">
+                    <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <rect x="4" y="4" width="16" height="16" rx="2" />
+                      <path d="M9 9h6v6H9z" />
+                    </svg>
+                    {collab.dockerStats.cpuPercent}%
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>CPU Usage</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="flex items-center gap-1 tabular-nums">
+                    <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <rect x="3" y="3" width="7" height="7" rx="1" />
+                      <rect x="14" y="3" width="7" height="7" rx="1" />
+                      <rect x="3" y="14" width="7" height="7" rx="1" />
+                      <rect x="14" y="14" width="7" height="7" rx="1" />
+                    </svg>
+                    {collab.dockerStats.memoryUsageMB} / {collab.dockerStats.memoryLimitMB} MB
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Memory: {collab.dockerStats.memoryPercent}% used
+                </TooltipContent>
+              </Tooltip>
+            </>
+          )}
+          {activeFilePath && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="cursor-help tabular-nums">{activeFilePath}</span>
+              </TooltipTrigger>
+              <TooltipContent>Active file path in the workspace</TooltipContent>
+            </Tooltip>
+          )}
+        </div>
+      </div>
+
       {/* Share / Invite Dialog */}
       <Dialog open={shareDialogOpen} onOpenChange={setShareDialogOpen}>
         <DialogContent className="sm:max-w-md">
@@ -1095,15 +1308,24 @@ export function WorkspaceShell({
         onOpenChange={setCommandPaletteOpen}
         files={files}
         onOpenFile={handleOpenFile}
+        onToggleSourceControl={() => {
+          setSidebarOpen(true)
+          setSidebarTab("git")
+        }}
       />
 
-      {/* New File Dialog */}
-      <NewFileDialog
-        open={newFileDialogOpen}
-        onOpenChange={setNewFileDialogOpen}
-        existingPaths={files.map((f) => f.path)}
-        onCreateFile={handleCreateFile}
-      />
+      {/* Diff Viewer Dialog */}
+      {diffViewPath && (
+        <Dialog open={!!diffViewPath} onOpenChange={() => setDiffViewPath(null)}>
+          <DialogContent className="max-w-4xl h-[80vh] p-0 overflow-hidden">
+            <DiffViewer
+              filepath={diffViewPath}
+              onClose={() => setDiffViewPath(null)}
+              className="h-full"
+            />
+          </DialogContent>
+        </Dialog>
+      )}
 
       {/* Tab Context Menu (reuses sidebar file context menu) */}
       <AnimatePresence>
@@ -1132,7 +1354,7 @@ export function WorkspaceShell({
         onToggleTerminal={() => setTerminalOpen((prev) => !prev)}
         onRun={handleRun}
         onToggleAiPrompt={() => setAiPromptOpen((prev) => !prev)}
-        onNewFile={() => setNewFileDialogOpen(true)}
+        onNewFile={() => setCreateFileTrigger((n) => n + 1)}
         onToggleTimeTravel={handleToggleTimeTravel}
         onSaveSnapshot={() => {
           void createLocalSnapshot("human", {
@@ -1144,6 +1366,7 @@ export function WorkspaceShell({
         }}
       />
     </div>
+    </GitProvider>
   )
 }
 

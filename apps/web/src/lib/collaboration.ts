@@ -38,8 +38,22 @@ interface AwarenessState {
   [key: string]: unknown
 }
 
+export type DockerStatus = "creating" | "ready" | "error" | null
+
+export interface DockerStats {
+  cpuPercent: number
+  memoryUsageMB: number
+  memoryLimitMB: number
+  memoryPercent: number
+}
+
 export interface UseCollaborationReturn {
   connected: boolean
+  dockerStatus: DockerStatus
+  dockerError: string | null
+  dockerStats: DockerStats | null
+  terminalBusy: Record<string, boolean>
+  terminalCwds: Record<string, string>
   files: FileNode[]
   presence: PresenceUser[]
   localClientId: number | null
@@ -49,6 +63,7 @@ export interface UseCollaborationReturn {
   aiAgents: AIAgent[]
   getYText: (path: string) => unknown | null
   getYdoc: () => unknown | null
+  getYjs: () => unknown | null
   getAwareness: () => unknown | null
   getTerminalInputYText: (sessionId: string) => unknown | null
   getAIChatInputYText: (chatId: string) => unknown | null
@@ -93,10 +108,16 @@ export interface UseCollaborationReturn {
   updateAgent: (id: string, updates: Partial<{ name: string; persona: string; systemPrompt: string; color: string; isActive: boolean }>) => void
   /** Delete an agent */
   deleteAgent: (id: string) => void
+  /** Reset the Docker container (destroy and recreate) */
+  resetContainer: () => void
   /** Subscribe to AI stream chunks — returns unsubscribe function */
   onAIStreamChunk: (handler: (data: { chatId: string; messageId: string; chunk: string; done?: boolean }) => void) => () => void
   /** Subscribe to AI merge results — returns unsubscribe function */
   onAIMergeResult: (handler: (data: { chatId: string; filePath: string; merged: string | null; explanation: string }) => void) => () => void
+  /** Broadcast a snapshot creation to other clients — returns unsubscribe function */
+  broadcastSnapshot: (snapshot: Record<string, unknown>) => void
+  /** Subscribe to snapshot-created events from other clients — returns unsubscribe function */
+  onSnapshotCreated: (handler: (data: { snapshot: Record<string, unknown> }) => void) => () => void
 }
 
 // ─── Hook ────────────────────────────────────────────────────────────────
@@ -125,6 +146,11 @@ export function useCollaboration({
   const [terminalSessions, setTerminalSessions] = useState<TerminalSession[]>([])
   const [aiChatSessions, setAIChatSessions] = useState<AIChatSession[]>([])
   const [aiAgents, setAIAgents] = useState<AIAgent[]>([])
+  const [dockerStatus, setDockerStatus] = useState<DockerStatus>(null)
+  const [dockerError, setDockerError] = useState<string | null>(null)
+  const [dockerStats, setDockerStats] = useState<DockerStats | null>(null)
+  const [terminalBusy, setTerminalBusy] = useState<Record<string, boolean>>({})
+  const [terminalCwds, setTerminalCwds] = useState<Record<string, string>>({})
 
   // ── Sync helpers ──
 
@@ -145,8 +171,9 @@ export function useCollaboration({
     filesMap.forEach((value: unknown, key: string) => {
       if (value instanceof Y.Text) {
         const ext = key.split(".").pop() ?? ""
+        const normalizedPath = key.startsWith("/") ? key : "/" + key
         newFiles.push({
-          path: key,
+          path: normalizedPath,
           content: (value as { toString(): string }).toString(),
           language: langMap[ext] ?? "plaintext",
         })
@@ -323,18 +350,17 @@ export function useCollaboration({
       const aiChatsMap = doc.getMap("aiChats")
       const agentsMap = doc.getMap("agents")
 
-      // Seed initial files
-      if (initialFiles.length > 0) {
-        doc.transact(() => {
-          for (const file of initialFiles) {
-            if (!filesMap.has(file.path)) {
-              const ytext = new Y.Text()
-              ytext.insert(0, file.content)
-              filesMap.set(file.path, ytext)
-            }
-          }
-        })
-      }
+      // NOTE: We intentionally do NOT seed initialFiles into the Yjs doc here.
+      // The server loads files from the latest snapshot and provides them during
+      // the initial Yjs sync (sync-step-1/2 exchange).  If the client also seeds
+      // files, both sides create separate Y.Text items for the same map keys.
+      // Y.Map LWW conflict resolution picks one winner per key, but the Monaco
+      // binding (created at editor mount time) may be attached to the loser,
+      // causing one-way collaboration where one user's edits are invisible.
+      //
+      // The file tree still renders immediately from the `initialFiles` prop via
+      // React state (`useState<FileNode[]>(initialFiles)`), so the UI is not
+      // empty while waiting for the sync to deliver the live Y.Text instances.
 
       // ── Socket.IO ──
       const socket = io(COLLAB_SERVER_URL, {
@@ -446,6 +472,45 @@ export function useCollaboration({
       socket.on("user-joined", () => syncPresence())
       socket.on("user-left", () => syncPresence())
 
+      // ── Docker status ──
+      socket.on("docker-status", (msg: { status: string; error?: string }) => {
+        if (!destroyed) {
+          setDockerStatus(msg.status as DockerStatus)
+          setDockerError(msg.error ?? null)
+        }
+      })
+
+      // ── Docker stats ──
+      socket.on("docker-stats", (msg: { cpuPercent: number; memoryUsageMB: number; memoryLimitMB: number; memoryPercent: number }) => {
+        if (!destroyed) {
+          setDockerStats(msg)
+        }
+      })
+
+      // ── Terminal busy / cwd updates ──
+      socket.on("terminal-busy", (msg: { sessionId: string; busy: boolean; cwd?: string }) => {
+        if (!destroyed) {
+          if (msg.sessionId === "__all__") {
+            // Container reset: clear all busy states and reset cwds
+            setTerminalBusy({})
+            if (msg.cwd) {
+              setTerminalCwds((prev) => {
+                const next: Record<string, string> = {}
+                for (const key of Object.keys(prev)) {
+                  next[key] = msg.cwd!
+                }
+                return next
+              })
+            }
+          } else {
+            setTerminalBusy((prev) => ({ ...prev, [msg.sessionId]: msg.busy }))
+            if (msg.cwd) {
+              setTerminalCwds((prev) => ({ ...prev, [msg.sessionId]: msg.cwd! }))
+            }
+          }
+        }
+      })
+
       // ── Doc updates → server ──
       const onDocUpdate = (update: Uint8Array, origin: unknown) => {
         if (origin === socket) return
@@ -537,6 +602,8 @@ export function useCollaboration({
 
   const getYdoc = useCallback(() => ydocRef.current, [])
 
+  const getYjs = useCallback(() => yjsRef.current, [])
+
   const getAwareness = useCallback(() => awarenessRef.current, [])
 
   const getYText = useCallback((path: string): unknown | null => {
@@ -544,7 +611,12 @@ export function useCollaboration({
     const doc = ydocRef.current
     if (!Y || !doc) return null
     const filesMap = doc.getMap("files")
-    const ytext = filesMap.get(path)
+    // Try exact path, then with/without leading slash
+    let ytext = filesMap.get(path)
+    if (!(ytext instanceof Y.Text)) {
+      const alt = path.startsWith("/") ? path.slice(1) : "/" + path
+      ytext = filesMap.get(alt)
+    }
     if (ytext instanceof Y.Text) return ytext
     return null
   }, [])
@@ -573,18 +645,22 @@ export function useCollaboration({
     const doc = ydocRef.current
     if (!Y || !doc) return
     const filesMap = doc.getMap("files")
-    if (filesMap.has(path)) return
+    // Normalize: strip leading slash so keys match container paths
+    const normalizedPath = path.startsWith("/") ? path.slice(1) : path
+    if (filesMap.has(normalizedPath) || filesMap.has("/" + normalizedPath)) return
     doc.transact(() => {
       const ytext = new Y.Text()
       if (content) ytext.insert(0, content)
-      filesMap.set(path, ytext)
+      filesMap.set(normalizedPath, ytext)
     })
   }, [])
 
   const deleteFile = useCallback((path: string) => {
     const doc = ydocRef.current
     if (!doc) return
-    doc.transact(() => { doc.getMap("files").delete(path) })
+    const filesMap = doc.getMap("files")
+    const key = filesMap.has(path) ? path : (path.startsWith("/") ? path.slice(1) : "/" + path)
+    doc.transact(() => { filesMap.delete(key) })
   }, [])
 
   const renameFile = useCallback((oldPath: string, newPath: string) => {
@@ -592,13 +668,22 @@ export function useCollaboration({
     const doc = ydocRef.current
     if (!Y || !doc) return
     const filesMap = doc.getMap("files")
-    const existing = filesMap.get(oldPath)
+    let existing = filesMap.get(oldPath)
+    let actualOldKey = oldPath
+    if (!(existing instanceof Y.Text)) {
+      const alt = oldPath.startsWith("/") ? oldPath.slice(1) : "/" + oldPath
+      existing = filesMap.get(alt)
+      actualOldKey = alt
+    }
     if (!(existing instanceof Y.Text)) return
+    // Normalize new key: strip leading slash to match container convention
+    const normalizedNewPath = newPath.startsWith("/") ? newPath.slice(1) : newPath
+    const content = existing.toString()
     doc.transact(() => {
       const newText = new Y.Text()
-      newText.insert(0, existing.toString())
-      filesMap.set(newPath, newText)
-      filesMap.delete(oldPath)
+      newText.insert(0, content)
+      filesMap.set(normalizedNewPath, newText)
+      filesMap.delete(actualOldKey)
     })
   }, [])
 
@@ -607,10 +692,16 @@ export function useCollaboration({
     const doc = ydocRef.current
     if (!Y || !doc) return
     const filesMap = doc.getMap("files")
-    let ytext = filesMap.get(path)
+    // Normalize: strip leading slash to match createFile convention
+    const normalizedPath = path.startsWith("/") ? path.slice(1) : path
+    let ytext = filesMap.get(normalizedPath)
+    if (!(ytext instanceof Y.Text)) {
+      // Try alternate path (with leading slash)
+      ytext = filesMap.get("/" + normalizedPath)
+    }
     if (!(ytext instanceof Y.Text)) {
       ytext = new Y.Text()
-      filesMap.set(path, ytext)
+      filesMap.set(normalizedPath, ytext)
     }
     const current = ytext.toString()
     if (current === newContent) return
@@ -861,6 +952,12 @@ export function useCollaboration({
     []
   )
 
+  const resetContainer = useCallback(() => {
+    const socket = socketRef.current
+    if (!socket) return
+    socket.emit("container-reset")
+  }, [])
+
   const onAIStreamChunk = useCallback(
     (handler: (data: { chatId: string; messageId: string; chunk: string; done?: boolean }) => void) => {
       const socket = socketRef.current
@@ -881,8 +978,32 @@ export function useCollaboration({
     []
   )
 
+  const broadcastSnapshot = useCallback(
+    (snapshot: Record<string, unknown>) => {
+      const socket = socketRef.current
+      if (!socket) return
+      socket.emit("snapshot-created", { snapshot })
+    },
+    []
+  )
+
+  const onSnapshotCreated = useCallback(
+    (handler: (data: { snapshot: Record<string, unknown> }) => void) => {
+      const socket = socketRef.current
+      if (!socket) return () => {}
+      socket.on("snapshot-created", handler)
+      return () => { socket.off("snapshot-created", handler) }
+    },
+    []
+  )
+
   return {
     connected,
+    dockerStatus,
+    dockerError,
+    dockerStats,
+    terminalBusy,
+    terminalCwds,
     files,
     presence,
     localClientId,
@@ -891,6 +1012,7 @@ export function useCollaboration({
     aiChatSessions,
     aiAgents,
     getYdoc,
+    getYjs,
     getYText,
     getAwareness,
     createFile,
@@ -913,7 +1035,10 @@ export function useCollaboration({
     createAgent,
     updateAgent,
     deleteAgent,
+    resetContainer,
     onAIStreamChunk,
     onAIMergeResult,
+    broadcastSnapshot,
+    onSnapshotCreated,
   }
 }
