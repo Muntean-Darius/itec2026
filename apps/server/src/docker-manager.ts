@@ -32,6 +32,12 @@ const WORKSPACE_IMAGE = process.env.WORKSPACE_IMAGE || "node:22-slim"
 // Working directory inside the container
 const CONTAINER_WORKDIR = "/home/itecify/workspace"
 
+/** Maximum execution time for a single command (seconds) */
+const COMMAND_TIMEOUT_SECONDS = 30
+
+/** Max number of processes allowed inside the container */
+const MAX_PIDS = 256
+
 /** Read a PEM cert from env var or file path, normalizing escaped newlines */
 function readCert(envValue: string | undefined, filePath: string | undefined): string | undefined {
   if (filePath) {
@@ -191,7 +197,7 @@ export async function ensureContainer(
       // Image may already be present locally
     }
 
-    // Create container
+    // Create container with security constraints
     const container = await docker.createContainer({
       Image: WORKSPACE_IMAGE,
       Cmd: ["sleep", "infinity"], // Keep container alive
@@ -205,6 +211,17 @@ export async function ensureContainer(
         // Limit resources per container
         Memory: 512 * 1024 * 1024,   // 512 MB
         NanoCpus: 1_000_000_000,     // 1 CPU
+        PidsLimit: MAX_PIDS,         // Prevent fork bombs
+        // Drop dangerous capabilities
+        CapDrop: ["ALL"],
+        // Add back only what we need
+        CapAdd: ["CHOWN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER"],
+        // No network for extra security (comment out if you need npm install etc.)
+        // NetworkMode: "none",
+        // Read-only root filesystem — only workspace is writable
+        ReadonlyRootfs: false, // We need to write to /home/itecify/workspace
+        // No privilege escalation
+        SecurityOpt: ["no-new-privileges"],
       },
     })
 
@@ -212,6 +229,47 @@ export async function ensureContainer(
 
     entry.containerId = container.id
     entry.container = container
+
+    // ── Sandbox hardening ──
+    // 1. Create the workspace user & directory structure
+    await execInContainer(entry, ["sh", "-c", [
+      // Create the sandbox user if it doesn't exist
+      "id itecify >/dev/null 2>&1 || adduser --disabled-password --gecos '' --home /home/itecify itecify",
+      // Ensure workspace dir exists and is owned by itecify
+      `mkdir -p ${CONTAINER_WORKDIR}`,
+      `chown -R itecify:itecify /home/itecify`,
+    ].join(" && ")])
+
+    // 2. Install a safe rm wrapper that blocks deletion outside workspace
+    await execInContainer(entry, ["sh", "-c", [
+      // Move real rm aside
+      "cp /bin/rm /bin/rm.real",
+      // Write a safe wrapper
+      `cat > /bin/rm << 'WRAPPER'
+#!/bin/sh
+# iTECify safe rm — only allows deletion inside the workspace
+WORKSPACE="/home/itecify/workspace"
+for arg in "$@"; do
+  case "$arg" in -*) continue ;; esac
+  # Resolve to absolute path
+  resolved="$(cd "$(dirname "$arg" 2>/dev/null)" 2>/dev/null && pwd)/$(basename "$arg")"
+  case "$resolved" in
+    "$WORKSPACE"/*) ;; # OK — inside workspace
+    *) echo "rm: cannot remove '$arg': Permission denied (outside sandbox)" >&2; exit 1 ;;
+  esac
+done
+/bin/rm.real "$@"
+WRAPPER`,
+      "chmod +x /bin/rm",
+    ].join("\n")])
+
+    // 3. Protect critical system paths from the sandbox user
+    await execInContainer(entry, ["sh", "-c", [
+      // Make system dirs immutable for the itecify user (owned by root, no write)
+      "chmod 755 /bin /usr /usr/bin /usr/local /sbin /etc /var /tmp",
+      // The workspace itself should be writable
+      `chmod 755 ${CONTAINER_WORKDIR}`,
+    ].join(" && ")])
 
     // Write initial files into the container
     await syncFilesToContainer(projectId, files)
@@ -312,6 +370,34 @@ export async function destroyContainer(projectId: string): Promise<void> {
   containers.delete(projectId)
   emitStatus(projectId, "destroyed")
   console.log(`[iTECify Docker] Container destroyed for project ${projectId}`)
+}
+
+/**
+ * Reset the container for a project: destroy the old one & recreate it
+ * with current file state. This is useful when the container is in a bad
+ * state (e.g. corrupted npm install, broken environment).
+ */
+export async function resetContainer(
+  projectId: string,
+  files: Map<string, string>,
+): Promise<void> {
+  console.log(`[iTECify Docker] Resetting container for project ${projectId}`)
+
+  // Stop file sync first
+  stopFileSync(projectId)
+
+  // Destroy existing container
+  await destroyContainer(projectId)
+
+  // Clear session cwds for this project
+  for (const key of Array.from(sessionCwds.keys())) {
+    if (key.startsWith(`${projectId}:`)) {
+      sessionCwds.delete(key)
+    }
+  }
+
+  // Re-create from scratch
+  await ensureContainer(projectId, files)
 }
 
 // ─── File Sync ───────────────────────────────────────────────────────────
@@ -483,15 +569,18 @@ export async function executeCommand(
   const cwd = sessionCwds.get(cwdKey) ?? CONTAINER_WORKDIR
 
   try {
-    // Wrap command: cd to tracked cwd, run command, then emit separator + pwd
+    // Wrap command: cd to tracked cwd, run command with timeout, then emit separator + pwd
     const CWD_SEPARATOR = "__ITECIFY_CWD__"
-    const wrappedCommand = `cd ${JSON.stringify(cwd)} 2>/dev/null; ${command}; __exit=$?; echo "${CWD_SEPARATOR}"; pwd; exit $__exit`
+    // Use `timeout` to enforce execution limit and prevent infinite loops
+    const wrappedCommand = `cd ${JSON.stringify(cwd)} 2>/dev/null; timeout ${COMMAND_TIMEOUT_SECONDS} sh -c ${JSON.stringify(command)}; __exit=$?; if [ $__exit -eq 124 ]; then echo "\\n⏱ Process killed: exceeded ${COMMAND_TIMEOUT_SECONDS}s time limit" >&2; fi; echo "${CWD_SEPARATOR}"; pwd; exit $__exit`
 
     const exec = await entry.container.exec({
       Cmd: ["sh", "-c", wrappedCommand],
       AttachStdout: true,
       AttachStderr: true,
       WorkingDir: CONTAINER_WORKDIR,
+      // Run as the sandboxed user
+      User: "itecify",
     })
 
     const stream = await exec.start({ hijack: true, stdin: false })
@@ -515,14 +604,14 @@ export async function executeCommand(
       })
       stream.on("error", reject)
 
-      // Safety timeout — kill after 30 seconds
+      // Safety timeout — kill after command timeout + buffer
       setTimeout(() => {
         try { stream.destroy() } catch { /* ignore */ }
         resolve({
           stdoutStr: Buffer.concat(stdoutChunks).toString("utf-8"),
-          stderrStr: Buffer.concat(stderrChunks).toString("utf-8") + "\n[Process timed out after 30s]",
+          stderrStr: Buffer.concat(stderrChunks).toString("utf-8") + `\n[Process timed out after ${COMMAND_TIMEOUT_SECONDS}s]`,
         })
-      }, 30_000)
+      }, (COMMAND_TIMEOUT_SECONDS + 5) * 1_000)
     })
 
     // Get exit code
@@ -568,6 +657,8 @@ export interface FileSyncCallbacks {
   getFiles: () => Map<string, string>
   /** Apply container changes to Yjs (additive merge — never deletes Yjs-only files) */
   applyContainerChanges: (containerFiles: Map<string, string>) => void
+  /** Remove files from Yjs that were deleted in the container */
+  removeFiles?: (paths: string[]) => void
 }
 
 interface FileSyncState {
@@ -764,9 +855,10 @@ export async function syncBeforeCommand(projectId: string): Promise<void> {
 }
 
 /**
+/**
  * Force a container → Yjs sync after a command completes.
- * Uses additive merge: new/changed container files are applied to Yjs,
- * but files only in Yjs are preserved (not deleted).
+ * Merges container state into Yjs: applies new/changed files and removes
+ * files that no longer exist in the container.
  */
 export async function syncAfterCommand(projectId: string): Promise<void> {
   const state = fileSyncStates.get(projectId)
@@ -790,6 +882,19 @@ export async function syncAfterCommand(projectId: string): Promise<void> {
 
     if (changedFiles.size > 0) {
       state.callbacks.applyContainerChanges(changedFiles)
+    }
+
+    // Remove Yjs files that no longer exist in the container
+    if (state.callbacks.removeFiles) {
+      const deletedPaths: string[] = []
+      for (const [filePath] of currentFiles) {
+        if (!containerFiles.has(filePath)) {
+          deletedPaths.push(filePath)
+        }
+      }
+      if (deletedPaths.length > 0) {
+        state.callbacks.removeFiles(deletedPaths)
+      }
     }
 
     // Update snapshots

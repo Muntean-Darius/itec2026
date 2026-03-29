@@ -7,7 +7,6 @@ import {
   File,
   FileJson,
   FileText,
-  FileCode2,
   FolderOpen,
   Folder,
   Search,
@@ -254,21 +253,108 @@ function buildTree(files: FileNode[]): TreeNode[] {
   return root.children
 }
 
+import {
+  SiTypescript,
+  SiJavascript,
+  SiPython,
+  SiHtml5,
+  SiCss,
+  SiReact,
+  SiDocker,
+  SiMarkdown,
+  SiYaml,
+  SiGit,
+  SiRust,
+  SiGo,
+  SiRuby,
+  SiPhp,
+  SiSwift,
+  SiCplusplus,
+  SiC,
+  SiGnubash,
+  SiToml,
+  SiSvg,
+} from "react-icons/si"
+
 export function getFileIcon(name: string, size = "h-4 w-4") {
-  if (name.endsWith(".tsx") || name.endsWith(".ts"))
-    return <FileCode2 className={`${size} text-blue-400`} />
-  if (name.endsWith(".json"))
+  const lower = name.toLowerCase()
+
+  // React (JSX/TSX)
+  if (lower.endsWith(".tsx") || lower.endsWith(".jsx"))
+    return <SiReact className={`${size} text-cyan-400`} />
+  // TypeScript
+  if (lower.endsWith(".ts") || lower.endsWith(".d.ts"))
+    return <SiTypescript className={`${size} text-blue-400`} />
+  // JavaScript
+  if (lower.endsWith(".js") || lower.endsWith(".mjs") || lower.endsWith(".cjs"))
+    return <SiJavascript className={`${size} text-yellow-300`} />
+  // Python
+  if (lower.endsWith(".py") || lower.endsWith(".pyw"))
+    return <SiPython className={`${size} text-green-400`} />
+  // HTML
+  if (lower.endsWith(".html") || lower.endsWith(".htm"))
+    return <SiHtml5 className={`${size} text-orange-500`} />
+  // CSS / SCSS / LESS
+  if (lower.endsWith(".css") || lower.endsWith(".scss") || lower.endsWith(".less") || lower.endsWith(".sass"))
+    return <SiCss className={`${size} text-blue-500`} />
+  // Markdown
+  if (lower.endsWith(".md") || lower.endsWith(".mdx"))
+    return <SiMarkdown className={`${size} text-text-secondary`} />
+  // JSON
+  if (lower.endsWith(".json") || lower.endsWith(".jsonc"))
     return <FileJson className={`${size} text-yellow-400`} />
-  if (name.endsWith(".md"))
-    return <FileText className={`${size} text-text-secondary`} />
-  if (name.endsWith(".css"))
-    return <FileCode2 className={`${size} text-purple-400`} />
-  if (name.endsWith(".js") || name.endsWith(".jsx"))
-    return <FileCode2 className={`${size} text-yellow-300`} />
-  if (name.endsWith(".html"))
-    return <FileCode2 className={`${size} text-orange-400`} />
-  if (name.endsWith(".py"))
-    return <FileCode2 className={`${size} text-green-400`} />
+  // YAML
+  if (lower.endsWith(".yaml") || lower.endsWith(".yml"))
+    return <SiYaml className={`${size} text-red-400`} />
+  // TOML
+  if (lower.endsWith(".toml"))
+    return <SiToml className={`${size} text-gray-400`} />
+  // Git
+  if (lower.startsWith(".git") || lower === ".gitignore" || lower === ".gitmodules")
+    return <SiGit className={`${size} text-orange-500`} />
+  // Docker
+  if (lower === "dockerfile" || lower.endsWith(".dockerfile") || lower === ".dockerignore")
+    return <SiDocker className={`${size} text-blue-400`} />
+  // Shell / Bash
+  if (lower.endsWith(".sh") || lower.endsWith(".bash") || lower.endsWith(".zsh"))
+    return <SiGnubash className={`${size} text-green-300`} />
+  // Rust
+  if (lower.endsWith(".rs"))
+    return <SiRust className={`${size} text-orange-400`} />
+  // Go
+  if (lower.endsWith(".go"))
+    return <SiGo className={`${size} text-cyan-300`} />
+  // Ruby
+  if (lower.endsWith(".rb"))
+    return <SiRuby className={`${size} text-red-500`} />
+  // PHP
+  if (lower.endsWith(".php"))
+    return <SiPhp className={`${size} text-indigo-300`} />
+  // Swift
+  if (lower.endsWith(".swift"))
+    return <SiSwift className={`${size} text-orange-400`} />
+  // C++
+  if (lower.endsWith(".cpp") || lower.endsWith(".cc") || lower.endsWith(".cxx") || lower.endsWith(".hpp"))
+    return <SiCplusplus className={`${size} text-blue-500`} />
+  // C
+  if (lower.endsWith(".c") || lower.endsWith(".h"))
+    return <SiC className={`${size} text-blue-300`} />
+  // SVG
+  if (lower.endsWith(".svg"))
+    return <SiSvg className={`${size} text-yellow-500`} />
+  // Images
+  if (lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".gif") || lower.endsWith(".webp") || lower.endsWith(".ico"))
+    return <FileText className={`${size} text-green-300`} />
+  // Config files
+  if (lower.endsWith(".env") || lower.endsWith(".env.local") || lower.endsWith(".env.example"))
+    return <File className={`${size} text-yellow-600`} />
+  // Lock files
+  if (lower.endsWith(".lock") || lower === "yarn.lock" || lower === "package-lock.json")
+    return <File className={`${size} text-gray-500`} />
+  // Text / Plain
+  if (lower.endsWith(".txt") || lower.endsWith(".log"))
+    return <FileText className={`${size} text-text-tertiary`} />
+
   return <File className={`${size} text-text-tertiary`} />
 }
 

@@ -26,6 +26,7 @@ import {
   ensureContainer,
   getContainerStatusInfo,
   destroyContainer,
+  resetContainer,
   executeCommand,
   getSessionCwd,
   onContainerStatus,
@@ -343,6 +344,15 @@ export function setupCollaboration(io: SocketIOServer) {
                 }
               }, "server")
             },
+            removeFiles: (paths: string[]) => {
+              const fMap = room.doc.getMap("files")
+              room.doc.transact(() => {
+                for (const p of paths) {
+                  fMap.delete(p)
+                  fMap.delete("/" + p)
+                }
+              }, "server")
+            },
           })
         })
         .catch((err) => {
@@ -467,6 +477,80 @@ export function setupCollaboration(io: SocketIOServer) {
 
       // Notify all clients that this terminal session is done + new cwd
       io.to(roomName).emit("terminal-busy", { sessionId: msg.sessionId, busy: false, cwd })
+    })
+
+    // ── Container Reset ──────────────────────────────────────────────────
+    socket.on("container-reset", async () => {
+      if (!currentRoom || !currentProjectId) return
+      const projectId = currentProjectId
+      const room = currentRoom
+      const roomName = `project:${projectId}`
+
+      console.log(`[iTECify] Container reset requested for ${projectId}`)
+
+      // Gather current Yjs file state
+      const filesMap = room.doc.getMap("files")
+      const fileEntries = new Map<string, string>()
+      filesMap.forEach((value: unknown, key: string) => {
+        if (value && typeof (value as { toString(): string }).toString === "function") {
+          const normalizedKey = key.startsWith("/") ? key.slice(1) : key
+          fileEntries.set(normalizedKey, (value as { toString(): string }).toString())
+        }
+      })
+
+      // Reset (destroy + recreate) the container
+      await resetContainer(projectId, fileEntries)
+
+      // Restart file sync
+      startFileSync(projectId, {
+        getFiles: () => {
+          const files = new Map<string, string>()
+          const fMap = room.doc.getMap("files")
+          fMap.forEach((value: unknown, key: string) => {
+            if (value && typeof (value as { toString(): string }).toString === "function") {
+              const normalizedKey = key.startsWith("/") ? key.slice(1) : key
+              files.set(normalizedKey, (value as { toString(): string }).toString())
+            }
+          })
+          return files
+        },
+        applyContainerChanges: (containerFiles: Map<string, string>) => {
+          const fMap = room.doc.getMap("files")
+          room.doc.transact(() => {
+            for (const [filePath, content] of containerFiles) {
+              let existing = fMap.get(filePath)
+              let actualKey = filePath
+              if (!(existing instanceof Y.Text)) {
+                existing = fMap.get("/" + filePath) as unknown
+                if (existing instanceof Y.Text) actualKey = "/" + filePath
+              }
+              if (existing instanceof Y.Text) {
+                const currentContent = existing.toString()
+                if (currentContent !== content) {
+                  existing.delete(0, existing.length)
+                  existing.insert(0, content)
+                }
+              } else {
+                const ytext = new Y.Text()
+                ytext.insert(0, content)
+                fMap.set(filePath, ytext)
+              }
+            }
+          }, "server")
+        },
+        removeFiles: (paths: string[]) => {
+          const fMap = room.doc.getMap("files")
+          room.doc.transact(() => {
+            for (const p of paths) {
+              fMap.delete(p)
+              fMap.delete("/" + p)
+            }
+          }, "server")
+        },
+      })
+
+      // Reset terminal cwds for all clients
+      io.to(roomName).emit("terminal-busy", { sessionId: "__all__", busy: false, cwd: "/home/itecify/workspace" })
     })
 
     // ── AI Chat ──────────────────────────────────────────────────────────

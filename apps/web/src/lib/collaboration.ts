@@ -107,6 +107,8 @@ export interface UseCollaborationReturn {
   updateAgent: (id: string, updates: Partial<{ name: string; persona: string; systemPrompt: string; color: string; isActive: boolean }>) => void
   /** Delete an agent */
   deleteAgent: (id: string) => void
+  /** Reset the Docker container (destroy and recreate) */
+  resetContainer: () => void
   /** Subscribe to AI stream chunks — returns unsubscribe function */
   onAIStreamChunk: (handler: (data: { chatId: string; messageId: string; chunk: string; done?: boolean }) => void) => () => void
   /** Subscribe to AI merge results — returns unsubscribe function */
@@ -484,9 +486,23 @@ export function useCollaboration({
       // ── Terminal busy / cwd updates ──
       socket.on("terminal-busy", (msg: { sessionId: string; busy: boolean; cwd?: string }) => {
         if (!destroyed) {
-          setTerminalBusy((prev) => ({ ...prev, [msg.sessionId]: msg.busy }))
-          if (msg.cwd) {
-            setTerminalCwds((prev) => ({ ...prev, [msg.sessionId]: msg.cwd! }))
+          if (msg.sessionId === "__all__") {
+            // Container reset: clear all busy states and reset cwds
+            setTerminalBusy({})
+            if (msg.cwd) {
+              setTerminalCwds((prev) => {
+                const next: Record<string, string> = {}
+                for (const key of Object.keys(prev)) {
+                  next[key] = msg.cwd!
+                }
+                return next
+              })
+            }
+          } else {
+            setTerminalBusy((prev) => ({ ...prev, [msg.sessionId]: msg.busy }))
+            if (msg.cwd) {
+              setTerminalCwds((prev) => ({ ...prev, [msg.sessionId]: msg.cwd! }))
+            }
           }
         }
       })
@@ -929,6 +945,12 @@ export function useCollaboration({
     []
   )
 
+  const resetContainer = useCallback(() => {
+    const socket = socketRef.current
+    if (!socket) return
+    socket.emit("container-reset")
+  }, [])
+
   const onAIStreamChunk = useCallback(
     (handler: (data: { chatId: string; messageId: string; chunk: string; done?: boolean }) => void) => {
       const socket = socketRef.current
@@ -986,6 +1008,7 @@ export function useCollaboration({
     createAgent,
     updateAgent,
     deleteAgent,
+    resetContainer,
     onAIStreamChunk,
     onAIMergeResult,
   }

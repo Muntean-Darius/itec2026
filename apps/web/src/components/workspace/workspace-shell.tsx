@@ -930,6 +930,7 @@ export function WorkspaceShell({
                   dockerError={collab.dockerError}
                   terminalBusy={collab.terminalBusy}
                   terminalCwds={collab.terminalCwds}
+                  onResetContainer={collab.resetContainer}
                 />
               </div>
             </>
@@ -1117,7 +1118,12 @@ export function WorkspaceShell({
             </>
           )}
           {activeFilePath && (
-            <span className="tabular-nums">{activeFilePath}</span>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="cursor-help tabular-nums">{activeFilePath}</span>
+              </TooltipTrigger>
+              <TooltipContent>Active file path in the workspace</TooltipContent>
+            </Tooltip>
           )}
         </div>
       </div>

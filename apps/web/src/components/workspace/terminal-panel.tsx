@@ -1,7 +1,8 @@
 "use client"
 
 import { useRef, useEffect, useState, useCallback } from "react"
-import { Terminal as TermIcon, Plus, X } from "lucide-react"
+import { Terminal as TermIcon, Plus, X, RotateCcw } from "lucide-react"
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
@@ -31,6 +32,8 @@ interface TerminalPanelProps {
   terminalBusy?: Record<string, boolean>
   /** Per-session current working directory */
   terminalCwds?: Record<string, string>
+  /** Callback to reset the Docker container */
+  onResetContainer?: () => void
 }
 
 /** Format cwd for display: replace /home/itecify/workspace with ~ */
@@ -55,6 +58,7 @@ export function TerminalPanel({
   dockerError,
   terminalBusy = {},
   terminalCwds = {},
+  onResetContainer,
 }: TerminalPanelProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -302,17 +306,15 @@ export function TerminalPanel({
                     {unread}
                   </span>
                 )}
-                {sessions.length > 1 && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onDeleteSession(session.id)
-                    }}
-                    className="ml-0.5 rounded-sm opacity-0 transition-opacity group-hover:opacity-100 hover:bg-active"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                )}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onDeleteSession(session.id)
+                  }}
+                  className="ml-0.5 rounded-sm opacity-0 transition-opacity group-hover:opacity-100 hover:bg-active"
+                >
+                  <X className="h-3 w-3" />
+                </button>
               </div>
             )
           })}
@@ -325,6 +327,26 @@ export function TerminalPanel({
             <Plus className="h-3.5 w-3.5" />
           </button>
         </div>
+
+        {/* Reset container button */}
+        {onResetContainer && dockerStatus === "ready" && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => {
+                  if (confirm("Reset the Docker container? This will destroy the current environment and recreate it from your files.")) {
+                    onResetContainer()
+                  }
+                }}
+                className="flex items-center justify-center rounded-md p-1 text-text-tertiary transition-colors hover:bg-hover hover:text-warning"
+                title="Reset container"
+              >
+                <RotateCcw className="h-3 w-3" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Reset Docker container</TooltipContent>
+          </Tooltip>
+        )}
 
         {isSessionBusy && (
           <span className="ml-auto flex items-center gap-1.5 pr-2">
@@ -430,8 +452,7 @@ export function TerminalPanel({
             })}
 
             {isSessionBusy && (
-              <div className="mt-1 flex items-center gap-2">
-                <span className="text-text-tertiary">{formatCwd(sessionCwd)} $</span>
+              <div className="mt-1">
                 <span className="inline-block animate-pulse text-text-tertiary">▊</span>
               </div>
             )}
