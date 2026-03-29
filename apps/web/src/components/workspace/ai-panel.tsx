@@ -1095,7 +1095,7 @@ function EmptyState({
         {/* Default AI option */}
         <button
           onClick={() => onStartChat()}
-          className="flex items-center gap-3 w-full rounded-xl border border-border-subtle bg-surface p-3 hover:border-ai-muted-border hover:bg-ai-muted/30 transition-all"
+          className="flex items-center gap-3 w-full rounded-xl bg-elevated/50 p-3 hover:bg-ai-muted/30 transition-all"
         >
           <div className="flex h-8 w-8 items-center justify-center rounded-lg shrink-0 bg-ai-muted">
             <Bot className="h-4 w-4 text-ai" />
@@ -1110,7 +1110,7 @@ function EmptyState({
           <button
             key={agent.id}
             onClick={() => onStartChat(agent.id)}
-            className="flex items-center gap-3 w-full rounded-xl border border-border-subtle bg-surface p-3 hover:border-ai-muted-border hover:bg-ai-muted/30 transition-all"
+            className="flex items-center gap-3 w-full rounded-xl bg-elevated/50 p-3 hover:bg-ai-muted/30 transition-all"
           >
             <div
               className="flex h-8 w-8 items-center justify-center rounded-lg shrink-0"

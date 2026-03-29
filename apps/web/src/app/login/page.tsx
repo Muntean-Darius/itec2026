@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { motion } from "framer-motion"
-import { Code2, ArrowRight, GitBranch, Loader2 } from "lucide-react"
+import { Code2, ArrowRight, Github, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
@@ -146,15 +146,14 @@ export default function LoginPage() {
 
         {/* OAuth */}
         <Button
-          variant="outline"
-          className="w-full h-10 gap-2"
+          className="w-full h-10 gap-2 font-medium"
           disabled={loading}
           onClick={handleGitHubLogin}
         >
           {loading ? (
             <Loader2 className="h-4 w-4 animate-spin" />
           ) : (
-            <GitBranch className="h-4 w-4" />
+            <Github className="h-4 w-4" />
           )}
           Continue with GitHub
         </Button>
@@ -173,8 +172,9 @@ export default function LoginPage() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             disabled={loading}
+            className="hover:border-brand focus-visible:ring-brand/50 transition-colors bg-secondary/50 dark:bg-elevated/50"
           />
-          <Button className="w-full gap-2" disabled={!email.trim() || loading}>
+          <Button variant="outline" className="w-full gap-2" disabled={!email.trim() || loading}>
             {loading ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
