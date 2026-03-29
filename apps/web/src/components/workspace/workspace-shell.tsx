@@ -1158,7 +1158,7 @@ export function WorkspaceShell({
             />
             <aside
               style={{ width: agentPanelWidth }}
-              className="shrink-0 overflow-hidden border-l border-border-subtle bg-surface"
+              className="shrink-0 overflow-hidden border-l border-border-subtle bg-surface flex flex-col min-h-0"
             >
               <AIPanel
                 agents={collab.aiAgents.length > 0 ? collab.aiAgents : agents}
