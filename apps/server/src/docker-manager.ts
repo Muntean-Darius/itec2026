@@ -775,6 +775,12 @@ async function runSyncCycle(projectId: string): Promise<void> {
     // 2. Pull container changes → Yjs
     const containerFiles = await readFilesFromContainer(projectId)
 
+    // Safety: if the container read returned nothing, skip pulling to avoid
+    // losing track of what was in the container.
+    if (containerFiles.size === 0 && currentFiles.size > 0) {
+      return
+    }
+
     // Find files that changed in the container since last pull
     const changedFiles = new Map<string, string>()
     for (const [filePath, content] of containerFiles) {
@@ -855,10 +861,14 @@ export async function syncBeforeCommand(projectId: string): Promise<void> {
 }
 
 /**
-/**
  * Force a container → Yjs sync after a command completes.
  * Merges container state into Yjs: applies new/changed files and removes
- * files that no longer exist in the container.
+ * ONLY files that were confirmed to be in the container before the command
+ * but are now gone (i.e. the command deleted them).
+ *
+ * We never delete Yjs files just because they weren't found in the container
+ * read — that would be destructive if the container read returned incomplete
+ * results (large workspaces, binary files, timeouts, etc.).
  */
 export async function syncAfterCommand(projectId: string): Promise<void> {
   const state = fileSyncStates.get(projectId)
@@ -870,6 +880,14 @@ export async function syncAfterCommand(projectId: string): Promise<void> {
   try {
     const containerFiles = await readFilesFromContainer(projectId)
     const currentFiles = state.callbacks.getFiles()
+
+    // Safety: if the container read returned nothing at all, something went
+    // wrong (timeout, permission error, etc.) — skip the entire sync to
+    // avoid accidentally wiping the Yjs doc.
+    if (containerFiles.size === 0 && currentFiles.size > 0) {
+      console.warn(`[iTECify Sync] Post-command container read returned 0 files for ${projectId} — skipping sync to protect Yjs state`)
+      return
+    }
 
     // Apply all container file changes to Yjs
     const changedFiles = new Map<string, string>()
@@ -884,10 +902,12 @@ export async function syncAfterCommand(projectId: string): Promise<void> {
       state.callbacks.applyContainerChanges(changedFiles)
     }
 
-    // Remove Yjs files that no longer exist in the container
+    // Only delete files that were KNOWN to be in the container before the
+    // command (tracked in lastSyncedToContainer) but are now gone.  This
+    // avoids deleting Yjs-only files that were never in the container.
     if (state.callbacks.removeFiles) {
       const deletedPaths: string[] = []
-      for (const [filePath] of currentFiles) {
+      for (const [filePath] of state.lastSyncedToContainer) {
         if (!containerFiles.has(filePath)) {
           deletedPaths.push(filePath)
         }

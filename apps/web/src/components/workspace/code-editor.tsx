@@ -433,6 +433,7 @@ export function CodeEditor({
   const [MonacoEditor, setMonacoEditor] = useState<typeof import("@monaco-editor/react").default | null>(null)
   /* eslint-disable @typescript-eslint/no-explicit-any */
   const bindingRef = useRef<any>(null)
+  const undoManagerRef = useRef<any>(null)
   const editorRef = useRef<any>(null)
   const yjsModuleRef = useRef<any>(null)
   /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -450,6 +451,8 @@ export function CodeEditor({
     return () => {
       bindingRef.current?.destroy()
       bindingRef.current = null
+      undoManagerRef.current?.destroy()
+      undoManagerRef.current = null
     }
   }, [])
 
@@ -572,7 +575,7 @@ export function CodeEditor({
 
   const handleEditorMount = useCallback(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (editor: any) => {
+    (editor: any, monaco: any) => {
       editorRef.current = editor
       setEditorReady(true)
 
@@ -580,14 +583,59 @@ export function CodeEditor({
       // We do NOT pass awareness here — y-monaco would render its own cursor
       // decorations which duplicate our custom React overlay. Cursor broadcasting
       // is handled manually in the cursor useEffect below.
+      //
+      // We also create a Y.UndoManager and override Monaco's Ctrl+Z / Ctrl+Shift+Z
+      // so that undo/redo only reverts the current user's local changes, preventing
+      // CRDT corruption from replaying raw model operations.
       if (yText) {
-        import("y-monaco").then(({ MonacoBinding }) => {
+        Promise.all([
+          import("y-monaco"),
+          import("yjs"),
+        ]).then(([{ MonacoBinding }, Y]) => {
           if (!editor.getModel()) return
+
           bindingRef.current = new MonacoBinding(
             yText as any,
             editor.getModel()!,
             new Set([editor])
           )
+
+          // Create an UndoManager scoped to this Y.Text so undo only
+          // reverts the current user's changes, not remote CRDT ops.
+          const undoManager = new Y.UndoManager(yText as any, {
+            captureTimeout: 500,
+          })
+          undoManagerRef.current = undoManager
+
+          // Override Monaco's built-in undo/redo to use Y.UndoManager.
+          // This prevents CRDT state corruption when pressing Ctrl+Z in a
+          // collaborative session — only LOCAL changes are undone.
+          const { KeyMod, KeyCode } = monaco
+
+          editor.addAction({
+            id: "itecify-undo",
+            label: "Undo (CRDT-safe)",
+            keybindings: [KeyMod.CtrlCmd | KeyCode.KeyZ],
+            run: () => {
+              if (undoManager.undoStack.length > 0) {
+                undoManager.undo()
+              }
+            },
+          })
+
+          editor.addAction({
+            id: "itecify-redo",
+            label: "Redo (CRDT-safe)",
+            keybindings: [
+              KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KeyZ,
+              KeyMod.CtrlCmd | KeyCode.KeyY,
+            ],
+            run: () => {
+              if (undoManager.redoStack.length > 0) {
+                undoManager.redo()
+              }
+            },
+          })
         }).catch(() => {
           console.warn("[iTECify] y-monaco binding failed, using fallback")
         })

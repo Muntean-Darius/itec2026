@@ -113,6 +113,10 @@ export interface UseCollaborationReturn {
   onAIStreamChunk: (handler: (data: { chatId: string; messageId: string; chunk: string; done?: boolean }) => void) => () => void
   /** Subscribe to AI merge results — returns unsubscribe function */
   onAIMergeResult: (handler: (data: { chatId: string; filePath: string; merged: string | null; explanation: string }) => void) => () => void
+  /** Broadcast a snapshot creation to other clients — returns unsubscribe function */
+  broadcastSnapshot: (snapshot: Record<string, unknown>) => void
+  /** Subscribe to snapshot-created events from other clients — returns unsubscribe function */
+  onSnapshotCreated: (handler: (data: { snapshot: Record<string, unknown> }) => void) => () => void
 }
 
 // ─── Hook ────────────────────────────────────────────────────────────────
@@ -971,6 +975,25 @@ export function useCollaboration({
     []
   )
 
+  const broadcastSnapshot = useCallback(
+    (snapshot: Record<string, unknown>) => {
+      const socket = socketRef.current
+      if (!socket) return
+      socket.emit("snapshot-created", { snapshot })
+    },
+    []
+  )
+
+  const onSnapshotCreated = useCallback(
+    (handler: (data: { snapshot: Record<string, unknown> }) => void) => {
+      const socket = socketRef.current
+      if (!socket) return () => {}
+      socket.on("snapshot-created", handler)
+      return () => { socket.off("snapshot-created", handler) }
+    },
+    []
+  )
+
   return {
     connected,
     dockerStatus,
@@ -1011,5 +1034,7 @@ export function useCollaboration({
     resetContainer,
     onAIStreamChunk,
     onAIMergeResult,
+    broadcastSnapshot,
+    onSnapshotCreated,
   }
 }

@@ -961,6 +961,28 @@ export function setupCollaboration(io: SocketIOServer) {
       }, "server")
     })
 
+    // ── Snapshot broadcast (time-travel sync across clients) ──────────
+    socket.on("snapshot-created", (msg: {
+      snapshot: {
+        id: string
+        projectId: string
+        createdAt: string
+        label: string | null
+        changeCount: number
+        userId: string
+        kind: string
+        promptSummary?: string
+        filePath?: string
+        fileStates?: Record<string, string>
+        userName?: string
+      }
+    }) => {
+      if (!currentProjectId) return
+      const roomName = `project:${currentProjectId}`
+      // Broadcast to all OTHER clients in the room so their timelines stay in sync
+      socket.to(roomName).emit("snapshot-created", msg)
+    })
+
     // ── Disconnect ──
     socket.on("disconnect", () => {
       if (currentProjectId && currentRoom) {

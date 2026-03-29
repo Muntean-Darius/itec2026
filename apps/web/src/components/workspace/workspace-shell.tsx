@@ -178,6 +178,22 @@ export function WorkspaceShell({
   // Recent AI undos for redo (expires after 15 seconds)
   const [recentAIUndos, setRecentAIUndos] = useState<RecentAIUndo[]>([])
 
+  // Listen for snapshot broadcasts from other clients
+  useEffect(() => {
+    const unsub = collab.onSnapshotCreated((data: { snapshot: Record<string, unknown> }) => {
+      const snap = data.snapshot as unknown as Snapshot
+      if (!snap?.id) return
+      setTimelineSnapshots((prev) => {
+        // Skip if we already have this snapshot
+        if (prev.some((s) => s.id === snap.id)) return prev
+        return [...prev, snap].sort(
+          (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+        )
+      })
+    })
+    return unsub
+  }, [collab])
+
   // Cleanup expired accepts and undos periodically
   useEffect(() => {
     const interval = setInterval(() => {
@@ -349,6 +365,7 @@ export function WorkspaceShell({
         label: opts?.label ?? null,
         changeCount: 1,
         userId: currentUser.id,
+        userName: currentUser.name,
         kind,
         promptSummary: opts?.promptSummary,
         filePath: opts?.filePath ?? (activeFilePath || liveFiles[0]?.path),
@@ -359,6 +376,9 @@ export function WorkspaceShell({
           (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
         )
       )
+
+      // Broadcast to other clients so their timelines stay in sync
+      collab.broadcastSnapshot(snapshot as unknown as Record<string, unknown>)
 
       void createSnapshot({
         projectId: project.id,
@@ -379,7 +399,7 @@ export function WorkspaceShell({
 
       return Promise.resolve(snapshot)
     },
-    [project.id, currentUser.id, activeFilePath, liveFiles, buildCurrentFileStates]
+    [project.id, currentUser.id, currentUser.name, activeFilePath, liveFiles, buildCurrentFileStates, collab]
   )
 
   const handleToggleTimeTravel = useCallback(() => {
@@ -840,7 +860,7 @@ export function WorkspaceShell({
             {activeFile ? (
               <>
                 <CodeEditor
-                  key={activeFilePath}
+                  key={`${activeFilePath}:${timeTravelActive ? "tt" : "live"}`}
                   file={activeFile}
                   readOnly={timeTravelActive}
                   yText={timeTravelActive ? undefined : collab.getYText(activeFilePath)}
