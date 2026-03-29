@@ -567,6 +567,49 @@ export function WorkspaceShell({
     return Object.fromEntries(entries)
   }, [liveFiles])
 
+  const applyRestoredFileStates = useCallback(
+    (restoredState: Record<string, string>) => {
+      // Prefer an atomic Yjs-level restore so all files are replaced deterministically.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const ydoc = collab.getYdoc() as any
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const Y = collab.getYjs() as any
+
+      if (ydoc?.getMap && Y?.Text) {
+        const filesMap = ydoc.getMap("files")
+        ydoc.transact(() => {
+          const keys: string[] = []
+          filesMap.forEach((_value: unknown, key: string) => {
+            keys.push(key)
+          })
+          for (const key of keys) {
+            filesMap.delete(key)
+          }
+
+          for (const [path, content] of Object.entries(restoredState)) {
+            const normalizedPath = path.startsWith("/") ? path.slice(1) : path
+            const ytext = new Y.Text()
+            if (content) ytext.insert(0, content)
+            filesMap.set(normalizedPath, ytext)
+          }
+        })
+        return
+      }
+
+      // Fallback path if Yjs refs are not available yet.
+      const restoredPaths = new Set(Object.keys(restoredState))
+      for (const livePath of liveFiles.map((f) => f.path)) {
+        if (!restoredPaths.has(livePath)) {
+          collab.deleteFile(livePath)
+        }
+      }
+      for (const [path, content] of Object.entries(restoredState)) {
+        collab.updateFileContent(path, content)
+      }
+    },
+    [collab, liveFiles]
+  )
+
   const createLocalSnapshot = useCallback(
     (
       kind: "cron" | "ai" | "human",
@@ -1348,29 +1391,7 @@ export function WorkspaceShell({
                   const restoredState = resolveSnapshotFileStates(snapshot)
                   if (restoredState) {
                     const restoredEntries = Object.entries(restoredState)
-                    const restoredPaths = new Set(restoredEntries.map(([path]) => path))
-                    const livePaths = new Set(liveFiles.map((f) => f.path))
-
-                    // Batch all Yjs mutations in a single doc transaction so the
-                    // entire restore is one atomic Yjs update for other clients.
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const ydoc = collab.getYdoc() as any
-                    const txnBody = () => {
-                      for (const livePath of livePaths) {
-                        if (!restoredPaths.has(livePath)) {
-                          collab.deleteFile(livePath)
-                        }
-                      }
-
-                      for (const [path, content] of restoredEntries) {
-                        collab.updateFileContent(path, content)
-                      }
-                    }
-                    if (ydoc?.transact) {
-                      ydoc.transact(txnBody)
-                    } else {
-                      txnBody()
-                    }
+                    applyRestoredFileStates(restoredState)
 
                     const firstPath = restoredEntries[0]?.[0]
                     if (firstPath) {
