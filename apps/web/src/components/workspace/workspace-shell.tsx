@@ -1126,19 +1126,19 @@ export function WorkspaceShell({
                       ydoc.transact(() => {
                         // 1. Delete files not present in the snapshot
                         const keysToDelete: string[] = []
-                        ;(filesMap as any).forEach((_v: unknown, key: string) => {
+                        filesMap.forEach((_v: unknown, key: string) => {
                           const norm = key.startsWith("/") ? key.slice(1) : key
                           if (!restoreKeys.has(norm)) keysToDelete.push(key)
                         })
-                        for (const k of keysToDelete) (filesMap as any).delete(k)
+                        for (const k of keysToDelete) filesMap.delete(k)
 
                         // 2. Update or create every file from the snapshot
                         for (const [path, content] of restoredEntries) {
                           const key = path.startsWith("/") ? path.slice(1) : path
-                          let ytext = (filesMap as any).get(key)
+                          let ytext = filesMap.get(key)
                           if (!(ytext instanceof Y.Text)) {
                             // Try with leading "/" just in case
-                            ytext = (filesMap as any).get("/" + key)
+                            ytext = filesMap.get("/" + key)
                           }
                           if (ytext instanceof Y.Text) {
                             if (ytext.toString() !== content) {
@@ -1148,7 +1148,7 @@ export function WorkspaceShell({
                           } else {
                             const nt = new Y.Text()
                             nt.insert(0, content)
-                            ;(filesMap as any).set(key, nt)
+                            filesMap.set(key, nt)
                           }
                         }
                       })
