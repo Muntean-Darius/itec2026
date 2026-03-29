@@ -1455,7 +1455,6 @@ export function WorkspaceShell({
                 onRenameChat={collab.renameAIChat}
                 onDeleteChat={collab.deleteAIChat}
                 getChatInputYText={collab.getAIChatInputYText}
-                onPromptPresenceUpdate={collab.updateAwareness}
               />
             </aside>
           </>
