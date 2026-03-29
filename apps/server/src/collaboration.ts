@@ -232,7 +232,13 @@ async function saveSnapshot(projectId: string, room: ProjectRoom) {
   }
   try {
     const blob = Y.encodeStateAsUpdate(room.doc)
-    const userId = room.users.values().next().value?.userId ?? "system"
+    const userId = room.users.values().next().value?.userId
+
+    // userId must be a valid UUID — skip the snapshot if no user is connected
+    if (!userId) {
+      console.log(`[iTECify] Snapshot skipped for ${projectId} (no connected user to attribute it to)`)
+      return
+    }
 
     // Extract file states from the Yjs doc for time-travel preview
     const filesMap = room.doc.getMap("files")
