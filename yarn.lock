@@ -5727,6 +5727,8 @@ __metadata:
 "itecify-monorepo@workspace:.":
   version: 0.0.0-use.local
   resolution: "itecify-monorepo@workspace:."
+  dependencies:
+    node-gyp: "npm:^12.2.0"
   languageName: unknown
   linkType: soft
 
@@ -6541,7 +6543,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"node-gyp@npm:latest":
+"node-gyp@npm:^12.2.0, node-gyp@npm:latest":
   version: 12.2.0
   resolution: "node-gyp@npm:12.2.0"
   dependencies:
