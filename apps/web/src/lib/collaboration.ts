@@ -38,7 +38,7 @@ interface AwarenessState {
   [key: string]: unknown
 }
 
-export type DockerStatus = "creating" | "ready" | "error" | null
+export type DockerStatus = "creating" | "ready" | "error" | "destroyed" | null
 
 export interface DockerStats {
   cpuPercent: number
@@ -51,6 +51,7 @@ export interface UseCollaborationReturn {
   connected: boolean
   dockerStatus: DockerStatus
   dockerError: string | null
+  dockerLogs: string[]
   dockerStats: DockerStats | null
   terminalBusy: Record<string, boolean>
   terminalCwds: Record<string, string>
@@ -154,6 +155,7 @@ export function useCollaboration({
   const [aiAgents, setAIAgents] = useState<AIAgent[]>([])
   const [dockerStatus, setDockerStatus] = useState<DockerStatus>(null)
   const [dockerError, setDockerError] = useState<string | null>(null)
+  const [dockerLogs, setDockerLogs] = useState<string[]>([])
   const [dockerStats, setDockerStats] = useState<DockerStats | null>(null)
   const [terminalBusy, setTerminalBusy] = useState<Record<string, boolean>>({})
   const [terminalCwds, setTerminalCwds] = useState<Record<string, string>>({})
@@ -481,8 +483,19 @@ export function useCollaboration({
       // ── Docker status ──
       socket.on("docker-status", (msg: { status: string; error?: string }) => {
         if (!destroyed) {
-          setDockerStatus(msg.status as DockerStatus)
+          const status = msg.status === "none" ? null : msg.status as DockerStatus
+          setDockerStatus(status)
           setDockerError(msg.error ?? null)
+          if (msg.status === "creating") {
+            setDockerLogs([])
+          }
+        }
+      })
+
+      // ── Docker creation logs ──
+      socket.on("docker-log", (msg: { message: string }) => {
+        if (!destroyed) {
+          setDockerLogs((prev) => [...prev, msg.message])
         }
       })
 
@@ -752,7 +765,13 @@ export function useCollaboration({
   const deleteTerminalSession = useCallback((sessionId: string) => {
     const doc = ydocRef.current
     if (!doc) return
-    doc.transact(() => { doc.getMap("terminals").delete(sessionId) })
+    const terminalsMap = doc.getMap("terminals")
+    doc.transact(() => { terminalsMap.delete(sessionId) })
+    // If all terminals are gone, tell the server to destroy the container
+    if (terminalsMap.size === 0) {
+      const socket = socketRef.current
+      if (socket) socket.emit("container-destroy")
+    }
   }, [])
 
   const sendTerminalInput = useCallback(
@@ -1034,6 +1053,7 @@ export function useCollaboration({
     connected,
     dockerStatus,
     dockerError,
+    dockerLogs,
     dockerStats,
     terminalBusy,
     terminalCwds,
