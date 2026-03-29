@@ -75,6 +75,11 @@ const TERMINAL_DEFAULT = 300
 const AGENT_PANEL_MIN = 220
 const AGENT_PANEL_MAX = 400
 const AGENT_PANEL_DEFAULT = AGENT_PANEL_MAX
+const MAIN_EDITOR_MIN_WIDTH = 360
+const RESIZE_HANDLE_THICKNESS = 1
+const AI_PANEL_OPEN_KEY = (projectId: string) => `itecify:${projectId}:ai-panel-open`
+const ACTIVE_FILE_KEY = (projectId: string) => `itecify:${projectId}:active-file`
+const OPEN_FILES_KEY = (projectId: string) => `itecify:${projectId}:open-files`
 
 export function WorkspaceShell({
   project,
@@ -85,6 +90,9 @@ export function WorkspaceShell({
   snapshots,
   initialGitCredentials,
 }: WorkspaceShellProps) {
+  const mainAreaRef = useRef<HTMLDivElement | null>(null)
+  const restoredWorkspacePrefsRef = useRef<string | null>(null)
+
   // Real-time collaboration
   const collab = useCollaboration({
     projectId: project.id,
@@ -143,6 +151,33 @@ export function WorkspaceShell({
     )
   }, [snapshots])
 
+  useEffect(() => {
+    restoredWorkspacePrefsRef.current = null
+  }, [project.id])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const stored = window.localStorage.getItem(AI_PANEL_OPEN_KEY(project.id))
+    if (stored === "1") setAgentRosterOpen(true)
+    if (stored === "0") setAgentRosterOpen(false)
+  }, [project.id])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    window.localStorage.setItem(AI_PANEL_OPEN_KEY(project.id), agentRosterOpen ? "1" : "0")
+  }, [project.id, agentRosterOpen])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (!activeFilePath) return
+    window.localStorage.setItem(ACTIVE_FILE_KEY(project.id), activeFilePath)
+  }, [project.id, activeFilePath])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    window.localStorage.setItem(OPEN_FILES_KEY(project.id), JSON.stringify(openFiles))
+  }, [project.id, openFiles])
+
   const resolveSnapshotFileStates = useCallback(
     (snapshot: Snapshot | null): Record<string, string> | null => {
       if (!snapshot) return null
@@ -197,6 +232,39 @@ export function WorkspaceShell({
     }
     return liveFiles
   }, [timeTravelActive, timeTravelSnapshot, liveFiles, resolveSnapshotFileStates])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (files.length === 0) return
+    if (restoredWorkspacePrefsRef.current === project.id) return
+
+    restoredWorkspacePrefsRef.current = project.id
+    const filesSet = new Set(files.map((f) => f.path))
+    const storedOpenRaw = window.localStorage.getItem(OPEN_FILES_KEY(project.id))
+    let storedOpenFiles: unknown = null
+    if (storedOpenRaw) {
+      try {
+        storedOpenFiles = JSON.parse(storedOpenRaw) as unknown
+      } catch {
+        storedOpenFiles = null
+      }
+    }
+    const validStoredOpenFiles = Array.isArray(storedOpenFiles)
+      ? storedOpenFiles.filter((p): p is string => typeof p === "string" && filesSet.has(p))
+      : []
+    const storedActiveFile = window.localStorage.getItem(ACTIVE_FILE_KEY(project.id))
+    const validStoredActiveFile = storedActiveFile && filesSet.has(storedActiveFile) ? storedActiveFile : null
+
+    if (validStoredOpenFiles.length > 0) {
+      setOpenFiles(validStoredOpenFiles)
+    }
+    const restoredActiveFile = validStoredActiveFile ?? validStoredOpenFiles[0]
+    if (!restoredActiveFile) return
+
+    setActiveFilePath(restoredActiveFile)
+    setOpenFiles((prev) => (prev.includes(restoredActiveFile) ? prev : [...prev, restoredActiveFile]))
+    collab.updateAwareness({ activeFile: restoredActiveFile })
+  }, [project.id, files, collab])
 
   // Active terminal session
   const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null)
@@ -351,22 +419,118 @@ export function WorkspaceShell({
     (path: string) => {
       setOpenFiles((prev) => {
         const next = prev.filter((p) => p !== path)
-        if (activeFilePath === path && next.length > 0) {
-          setActiveFilePath(next[next.length - 1])
+        if (activeFilePath === path) {
+          if (next.length > 0) {
+            const fallback = next[next.length - 1]
+            setActiveFilePath(fallback)
+            collab.updateAwareness({ activeFile: fallback })
+          } else {
+            setActiveFilePath("")
+            collab.updateAwareness({ activeFile: null })
+          }
         }
         return next
       })
     },
-    [activeFilePath]
+    [activeFilePath, collab]
+  )
+
+  const handleRenamePath = useCallback(
+    (oldPath: string, newPath: string) => {
+      const normalizedOld = oldPath.startsWith("/") ? oldPath : `/${oldPath}`
+      const normalizedNew = newPath.startsWith("/") ? newPath : `/${newPath}`
+      const exactMatch = files.some((f) => f.path === normalizedOld)
+      const prefix = normalizedOld.endsWith("/") ? normalizedOld : `${normalizedOld}/`
+      const targets = exactMatch
+        ? [normalizedOld]
+        : files
+            .filter((f) => f.path === normalizedOld || f.path.startsWith(prefix))
+            .map((f) => f.path)
+
+      if (targets.length === 0) return
+
+      for (const target of targets) {
+        const suffix = target.slice(normalizedOld.length)
+        collab.renameFile(target, `${normalizedNew}${suffix}`)
+      }
+
+      setOpenFiles((prev) =>
+        prev.map((path) => {
+          const isMatch = path === normalizedOld || path.startsWith(prefix)
+          if (!isMatch) return path
+          const suffix = path.slice(normalizedOld.length)
+          return `${normalizedNew}${suffix}`
+        })
+      )
+
+      if (activeFilePath === normalizedOld || activeFilePath.startsWith(prefix)) {
+        const suffix = activeFilePath.slice(normalizedOld.length)
+        const nextActive = `${normalizedNew}${suffix}`
+        setActiveFilePath(nextActive)
+        collab.updateAwareness({ activeFile: nextActive })
+      }
+    },
+    [activeFilePath, collab, files]
   )
 
   const handleDeleteFile = useCallback(
     (path: string) => {
-      collab.deleteFile(path)
-      // Also close the tab if open
-      handleCloseTab(path)
+      const normalizedPath = path.startsWith("/") ? path : `/${path}`
+      const exactMatch = files.some((f) => f.path === normalizedPath)
+      const prefix = normalizedPath.endsWith("/") ? normalizedPath : `${normalizedPath}/`
+      const targets = exactMatch
+        ? [normalizedPath]
+        : files
+            .filter((f) => f.path === normalizedPath || f.path.startsWith(prefix))
+            .map((f) => f.path)
+
+      if (targets.length === 0) return
+      for (const target of targets) {
+        collab.deleteFile(target)
+      }
+
+      const removed = new Set(targets)
+      setOpenFiles((prev) => {
+        const next = prev.filter((p) => !removed.has(p))
+        if (removed.has(activeFilePath)) {
+          const fallback = next[next.length - 1] ?? ""
+          setActiveFilePath(fallback)
+          collab.updateAwareness({ activeFile: fallback || null })
+        }
+        return next
+      })
     },
-    [collab, handleCloseTab]
+    [activeFilePath, collab, files]
+  )
+
+  const handleDuplicatePath = useCallback(
+    (path: string) => {
+      const normalizedPath = path.startsWith("/") ? path : `/${path}`
+      const sourceFile = files.find((f) => f.path === normalizedPath)
+      if (sourceFile) {
+        const ext = normalizedPath.includes(".") ? normalizedPath.substring(normalizedPath.lastIndexOf(".")) : ""
+        const base = ext ? normalizedPath.substring(0, normalizedPath.lastIndexOf(".")) : normalizedPath
+        const duplicatePath = `${base} (copy)${ext}`
+        collab.createFile(duplicatePath)
+        collab.updateFileContent(duplicatePath, sourceFile.content)
+        return
+      }
+
+      const prefix = normalizedPath.endsWith("/") ? normalizedPath : `${normalizedPath}/`
+      const descendants = files.filter((f) => f.path.startsWith(prefix))
+      if (descendants.length === 0) return
+
+      const folderName = normalizedPath.split("/").pop() ?? "folder"
+      const parentPath = normalizedPath.substring(0, normalizedPath.lastIndexOf("/"))
+      const copiedFolderPath = `${parentPath}/${folderName} (copy)`
+      for (const descendant of descendants) {
+        const suffix = descendant.path.slice(normalizedPath.length)
+        const duplicatePath = `${copiedFolderPath}${suffix}`
+        collab.createFile(duplicatePath)
+        collab.updateFileContent(duplicatePath, descendant.content)
+      }
+    },
+    [collab, files]
   )
 
   const isRunning = activeTerminalId ? (collab.terminalBusy[activeTerminalId] ?? false) : false
@@ -480,13 +644,6 @@ export function WorkspaceShell({
   }, [timeTravelActive, liveFiles.length, createLocalSnapshot])
 
   // Resize handlers
-  const handleSidebarResize = useCallback(
-    (delta: number) => {
-      setSidebarWidth((w) => Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, w + delta)))
-    },
-    []
-  )
-
   const handleTerminalResize = useCallback(
     (delta: number) => {
       setTerminalHeight((h) => Math.min(TERMINAL_MAX, Math.max(TERMINAL_MIN, h - delta)))
@@ -494,12 +651,98 @@ export function WorkspaceShell({
     []
   )
 
+  const getMainAreaWidth = useCallback(() => {
+    if (mainAreaRef.current) return mainAreaRef.current.clientWidth
+    if (typeof window !== "undefined") return window.innerWidth
+    return 0
+  }, [])
+
+  const getSidebarMaxWidth = useCallback(
+    (mainAreaWidth: number, currentAgentPanelWidth: number) => {
+      const agentSpace = agentRosterOpen
+        ? currentAgentPanelWidth + RESIZE_HANDLE_THICKNESS
+        : 0
+      return Math.min(
+        SIDEBAR_MAX,
+        Math.max(0, mainAreaWidth - MAIN_EDITOR_MIN_WIDTH - agentSpace - RESIZE_HANDLE_THICKNESS)
+      )
+    },
+    [agentRosterOpen]
+  )
+
+  const getAgentPanelMaxWidth = useCallback(
+    (mainAreaWidth: number, currentSidebarWidth: number) => {
+      const sidebarSpace = sidebarOpen
+        ? currentSidebarWidth + RESIZE_HANDLE_THICKNESS
+        : 0
+      return Math.min(
+        AGENT_PANEL_MAX,
+        Math.max(0, mainAreaWidth - MAIN_EDITOR_MIN_WIDTH - sidebarSpace - RESIZE_HANDLE_THICKNESS)
+      )
+    },
+    [sidebarOpen]
+  )
+
+  const handleSidebarResize = useCallback(
+    (delta: number) => {
+      const mainAreaWidth = getMainAreaWidth()
+      setSidebarWidth((w) => {
+        const maxWidth = getSidebarMaxWidth(mainAreaWidth, agentPanelWidth)
+        const minWidth = Math.min(SIDEBAR_MIN, maxWidth)
+        return Math.min(maxWidth, Math.max(minWidth, w + delta))
+      })
+    },
+    [agentPanelWidth, getMainAreaWidth, getSidebarMaxWidth]
+  )
+
   const handleAgentPanelResize = useCallback(
     (delta: number) => {
-      setAgentPanelWidth((w) => Math.min(AGENT_PANEL_MAX, Math.max(AGENT_PANEL_MIN, w - delta)))
+      const mainAreaWidth = getMainAreaWidth()
+      setAgentPanelWidth((w) => {
+        const maxWidth = getAgentPanelMaxWidth(mainAreaWidth, sidebarWidth)
+        const minWidth = Math.min(AGENT_PANEL_MIN, maxWidth)
+        return Math.min(maxWidth, Math.max(minWidth, w - delta))
+      })
     },
-    []
+    [getAgentPanelMaxWidth, getMainAreaWidth, sidebarWidth]
   )
+
+  useEffect(() => {
+    const clampHorizontalPanels = () => {
+      const mainAreaWidth = getMainAreaWidth()
+      if (!mainAreaWidth) return
+
+      const sidebarMax = getSidebarMaxWidth(mainAreaWidth, agentPanelWidth)
+      const sidebarMin = Math.min(SIDEBAR_MIN, sidebarMax)
+      const clampedSidebar = sidebarOpen
+        ? Math.min(sidebarMax, Math.max(sidebarMin, sidebarWidth))
+        : sidebarWidth
+
+      if (sidebarOpen && clampedSidebar !== sidebarWidth) {
+        setSidebarWidth(clampedSidebar)
+      }
+
+      if (!agentRosterOpen) return
+      const agentMax = getAgentPanelMaxWidth(mainAreaWidth, clampedSidebar)
+      const agentMin = Math.min(AGENT_PANEL_MIN, agentMax)
+      const clampedAgent = Math.min(agentMax, Math.max(agentMin, agentPanelWidth))
+      if (clampedAgent !== agentPanelWidth) {
+        setAgentPanelWidth(clampedAgent)
+      }
+    }
+
+    clampHorizontalPanels()
+    window.addEventListener("resize", clampHorizontalPanels)
+    return () => window.removeEventListener("resize", clampHorizontalPanels)
+  }, [
+    agentPanelWidth,
+    agentRosterOpen,
+    getAgentPanelMaxWidth,
+    getMainAreaWidth,
+    getSidebarMaxWidth,
+    sidebarOpen,
+    sidebarWidth,
+  ])
 
   // ── Compute AI blocks for the currently open file ──
   const activeFileAIBlocks = useMemo<AIBlock[]>(() => {
@@ -822,7 +1065,7 @@ export function WorkspaceShell({
       </header>
 
       {/* ─── Main Area ─── */}
-      <div className="flex flex-1 overflow-hidden">
+      <div ref={mainAreaRef} className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
         {sidebarOpen && (
           <>
@@ -867,8 +1110,9 @@ export function WorkspaceShell({
                     presence={livePresence}
                     onOpenFile={handleOpenFile}
                     onDeleteFile={handleDeleteFile}
-                    onRenameFile={(oldPath, newPath) => collab.renameFile(oldPath, newPath)}
+                    onRenameFile={handleRenamePath}
                     onCreateFile={handleCreateFile}
+                    onDuplicatePath={handleDuplicatePath}
                     createFileTrigger={createFileTrigger}
                   />
                 </TabsContent>
@@ -901,7 +1145,7 @@ export function WorkspaceShell({
         )}
 
         {/* Editor + Terminal Column */}
-        <div className="flex flex-1 flex-col overflow-hidden">
+        <div className="flex flex-1 min-w-0 flex-col overflow-hidden">
           {/* Editor Toolbar */}
           <div className="flex h-9 shrink-0 items-center border-b border-border-subtle bg-surface px-1">
             <Tooltip>
@@ -1447,7 +1691,7 @@ export function WorkspaceShell({
               setActiveFilePath(path)
             }}
             onDeleteFile={handleDeleteFile}
-            onRenameFile={(oldPath, newPath) => collab.renameFile(oldPath, newPath)}
+            onRenameFile={handleRenamePath}
             onCopyPath={(path) => navigator.clipboard?.writeText(path)}
           />
         )}

@@ -42,6 +42,10 @@ export interface PresenceUser extends User {
   terminalDraft?: string
   /** Terminal cursor position (character offset in shared input) */
   terminalCursorPos?: number
+  /** Active AI chat prompt being edited */
+  aiPromptChatId?: string
+  /** AI prompt cursor position (character offset in shared input) */
+  aiPromptCursorPos?: number
 }
 
 export interface AIAgent {

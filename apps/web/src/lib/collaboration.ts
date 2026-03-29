@@ -35,6 +35,9 @@ interface AwarenessState {
   isTyping: boolean
   terminalSessionId?: string
   terminalDraft?: string
+  terminalCursorPos?: number
+  aiPromptChatId?: string | null
+  aiPromptCursorPos?: number | null
   [key: string]: unknown
 }
 
@@ -225,6 +228,8 @@ export function useCollaboration({
           terminalSessionId: u.terminalSessionId as string | undefined,
           terminalDraft: u.terminalDraft as string | undefined,
           terminalCursorPos: u.terminalCursorPos as number | undefined,
+          aiPromptChatId: u.aiPromptChatId as string | undefined,
+          aiPromptCursorPos: u.aiPromptCursorPos as number | undefined,
         })
       }
     })
@@ -268,6 +273,7 @@ export function useCollaboration({
     const sessions: AIChatSession[] = []
 
     aiChatsMap.forEach((value: unknown, key: string) => {
+      if (key === "__draft__") return
       if (value && typeof value === "object" && typeof (value as Record<string, unknown>).get === "function") {
         const chatMap = value as { get(k: string): unknown }
         const messages: AIChatMessage[] = []
@@ -282,13 +288,20 @@ export function useCollaboration({
           }
         }
 
+        const agentId = (chatMap.get("agentId") as string) ?? ""
+        const agentName = (chatMap.get("agentName") as string) ?? "AI"
+        const isGenerating = (chatMap.get("isGenerating") as boolean) ?? false
+        if (!agentId && messages.length === 0 && !isGenerating) {
+          return
+        }
+
         sessions.push({
           id: key,
-          agentId: (chatMap.get("agentId") as string) ?? "",
-          agentName: (chatMap.get("agentName") as string) ?? "AI",
+          agentId,
+          agentName,
           name: (chatMap.get("name") as string) || undefined,
           messages,
-          isGenerating: (chatMap.get("isGenerating") as boolean) ?? false,
+          isGenerating,
         })
       }
     })
@@ -326,7 +339,6 @@ export function useCollaboration({
 
   useEffect(() => {
     let destroyed = false
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let cleanupFn: (() => void) | undefined
 
     async function init() {
@@ -552,7 +564,12 @@ export function useCollaboration({
         const upd = awarenessProtocol.encodeAwarenessUpdate(awareness, [doc.clientID])
         socket.emit("awareness-update", { data: Array.from(upd) })
       }
+      const onAwarenessUpdate = () => {
+        // Keep presence reactive for remote cursor-only movements.
+        syncPresence()
+      }
       awareness.on("change", onAwarenessChange)
+      awareness.on("update", onAwarenessUpdate)
 
       // ── Observe shared types ──
       const onFilesChange = () => syncFilesFromDoc()
@@ -586,6 +603,8 @@ export function useCollaboration({
         cursorPosition: null,
         isTyping: false,
         isOnline: true,
+        aiPromptChatId: null,
+        aiPromptCursorPos: null,
       })
       // Top-level fields for y-monaco (reads state.name, state.color directly)
       awareness.setLocalStateField("name", currentUser.name)
@@ -594,6 +613,7 @@ export function useCollaboration({
       cleanupFn = () => {
         doc.off("update", onDocUpdate)
         awareness.off("change", onAwarenessChange)
+        awareness.off("update", onAwarenessUpdate)
         filesMap.unobserveDeep(onFilesChange)
         metaMap.unobserveDeep(onMetaChange)
         terminalsMap.unobserveDeep(onTerminalsChange)
