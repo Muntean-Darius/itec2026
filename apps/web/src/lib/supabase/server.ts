@@ -17,9 +17,10 @@ export async function createClient() {
             cookiesToSet.forEach(({ name, value, options }) =>
               cookieStore.set(name, value, options)
             )
-          } catch {
-            // The `setAll` method is called from a Server Component.
-            // This can be ignored if you have middleware refreshing user sessions.
+          } catch (error) {
+            // Expected in Server Components (read-only), but log in other contexts
+            // so auth issues don't fail silently in Route Handlers / Server Actions.
+            console.warn("[supabase/server] setAll failed:", error)
           }
         },
       },

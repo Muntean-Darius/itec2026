@@ -222,11 +222,41 @@ export function createGitOperations(
     const ref = branch || (await currentBranch())
     if (!ref) throw new Error("No branch to pull")
 
+    // Check if the local branch has any commits (empty repo after init has no HEAD)
+    let hasLocalCommits = false
+    try {
+      await git.resolveRef({ ...commonOpts, ref: "HEAD" })
+      hasLocalCommits = true
+    } catch {
+      // No commits yet
+    }
+
+    if (!hasLocalCommits) {
+      // Empty local repo — fetch the remote branch then checkout to create local branch
+      await git.fetch({
+        ...commonOpts,
+        http,
+        remote,
+        ref,
+        remoteRef: ref,
+        corsProxy: CORS_PROXY,
+        singleBranch: true,
+        onAuth: () => ({ username: credentials.username, password: credentials.password }),
+      })
+      // Point local branch HEAD to the fetched remote ref
+      const remoteOid = await git.resolveRef({ ...commonOpts, ref: `refs/remotes/${remote}/${ref}` })
+      await fs.promises.writeFile(`/.git/refs/heads/${ref}`, remoteOid + "\n", { encoding: "utf8" })
+      // Checkout the files into the working directory
+      await git.checkout({ ...commonOpts, ref })
+      return
+    }
+
     await git.pull({
       ...commonOpts,
       http,
       remote,
       ref,
+      remoteRef: ref,
       corsProxy: CORS_PROXY,
       singleBranch: true,
       author: { name: credentials.username, email: `${credentials.username}@users.noreply.github.com` },
@@ -235,10 +265,13 @@ export function createGitOperations(
   }
 
   const fetch = async (credentials: GitCredentials, remote: string = "origin"): Promise<void> => {
+    const ref = await currentBranch()
     await git.fetch({
       ...commonOpts,
       http,
       remote,
+      ref,
+      remoteRef: ref,
       corsProxy: CORS_PROXY,
       singleBranch: true,
       onAuth: () => ({ username: credentials.username, password: credentials.password }),
