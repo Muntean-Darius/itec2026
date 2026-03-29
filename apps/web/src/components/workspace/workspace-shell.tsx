@@ -419,13 +419,20 @@ export function WorkspaceShell({
     (path: string) => {
       setOpenFiles((prev) => {
         const next = prev.filter((p) => p !== path)
-        if (activeFilePath === path && next.length > 0) {
-          setActiveFilePath(next[next.length - 1])
+        if (activeFilePath === path) {
+          if (next.length > 0) {
+            const fallback = next[next.length - 1]
+            setActiveFilePath(fallback)
+            collab.updateAwareness({ activeFile: fallback })
+          } else {
+            setActiveFilePath("")
+            collab.updateAwareness({ activeFile: null })
+          }
         }
         return next
       })
     },
-    [activeFilePath]
+    [activeFilePath, collab]
   )
 
   const handleRenamePath = useCallback(
@@ -486,7 +493,9 @@ export function WorkspaceShell({
       setOpenFiles((prev) => {
         const next = prev.filter((p) => !removed.has(p))
         if (removed.has(activeFilePath)) {
-          setActiveFilePath(next[next.length - 1] ?? "")
+          const fallback = next[next.length - 1] ?? ""
+          setActiveFilePath(fallback)
+          collab.updateAwareness({ activeFile: fallback || null })
         }
         return next
       })
