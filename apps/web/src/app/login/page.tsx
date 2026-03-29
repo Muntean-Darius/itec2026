@@ -51,16 +51,21 @@ function getAuthErrorMessage(errorMsg: string, method: "GitHub" | "email"): { ti
 }
 
 const getURL = () => {
+  // Use the actual origin the user is browsing from.
+  // This is always correct — localhost in dev, prod URL in production —
+  // without relying on env vars that are baked in at build time.
+  if (typeof window !== "undefined") {
+    return window.location.origin
+  }
+  // SSR fallback (this function is only called from client-side event handlers,
+  // so this branch is never reached in practice).
   let url =
     process?.env?.NEXT_PUBLIC_SITE_URL ??
     process?.env?.NEXT_PUBLIC_VERCEL_URL ??
-    'http://localhost:3000';
-
-  url = url.includes('http') ? url : `https://${url}`;
-
-  url = url.charAt(url.length - 1) === '/' ? url.slice(0, -1) : url;
-
-  return url;
+    'http://localhost:3000'
+  url = url.includes('http') ? url : `https://${url}`
+  url = url.charAt(url.length - 1) === '/' ? url.slice(0, -1) : url
+  return url
 };
 
 export default function LoginPage() {
