@@ -271,6 +271,7 @@ export function useCollaboration({
     const sessions: AIChatSession[] = []
 
     aiChatsMap.forEach((value: unknown, key: string) => {
+      if (key === "__draft__") return
       if (value && typeof value === "object" && typeof (value as Record<string, unknown>).get === "function") {
         const chatMap = value as { get(k: string): unknown }
         const messages: AIChatMessage[] = []
@@ -285,13 +286,20 @@ export function useCollaboration({
           }
         }
 
+        const agentId = (chatMap.get("agentId") as string) ?? ""
+        const agentName = (chatMap.get("agentName") as string) ?? "AI"
+        const isGenerating = (chatMap.get("isGenerating") as boolean) ?? false
+        if (!agentId && messages.length === 0 && !isGenerating) {
+          return
+        }
+
         sessions.push({
           id: key,
-          agentId: (chatMap.get("agentId") as string) ?? "",
-          agentName: (chatMap.get("agentName") as string) ?? "AI",
+          agentId,
+          agentName,
           name: (chatMap.get("name") as string) || undefined,
           messages,
-          isGenerating: (chatMap.get("isGenerating") as boolean) ?? false,
+          isGenerating,
         })
       }
     })

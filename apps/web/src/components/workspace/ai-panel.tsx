@@ -83,6 +83,7 @@ const AGENT_COLORS = [
 // ─── Sidebar Modes ───────────────────────────────────────────────────────
 
 type PanelMode = "chats" | "agents" | "new-agent" | "edit-agent"
+const SHARED_DRAFT_CHAT_ID = "__draft__"
 
 export function AIPanel({
   agents,
@@ -269,7 +270,7 @@ function ChatView({
   const effectiveAgentId = selectedAgentId ?? (activeAgents.length > 0 ? activeAgents[0].id : null)
 
   // Effective chat ID for Y.Text binding
-  const effectiveChatId = activeChatId ?? (chatSessions.length > 0 ? chatSessions[0].id : null)
+  const effectiveChatId = activeChatId ?? (chatSessions.length > 0 ? chatSessions[0].id : SHARED_DRAFT_CHAT_ID)
 
   // ── Y.Text sync for shared chat input ──
   useEffect(() => {

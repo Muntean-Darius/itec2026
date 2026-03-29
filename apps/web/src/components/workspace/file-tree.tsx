@@ -44,6 +44,7 @@ interface FileTreeProps {
   onDeleteFile?: (path: string) => void
   onRenameFile?: (oldPath: string, newPath: string) => void
   onCreateFile?: (path: string) => void
+  onDuplicatePath?: (path: string) => void
   /** Increment to trigger inline file creation at root */
   createFileTrigger?: number
 }
@@ -366,6 +367,7 @@ export function FileTree({
   onDeleteFile,
   onRenameFile,
   onCreateFile,
+  onDuplicatePath,
   createFileTrigger,
 }: FileTreeProps) {
   const [search, setSearch] = useState("")
@@ -380,7 +382,9 @@ export function FileTree({
   // External trigger for inline file creation (e.g., keyboard shortcut "a")
   useEffect(() => {
     if (createFileTrigger && createFileTrigger > 0) {
-      setCreatingIn({ parentPath: "/", isDir: false })
+      queueMicrotask(() => {
+        setCreatingIn({ parentPath: "/", isDir: false })
+      })
     }
   }, [createFileTrigger])
 
@@ -434,14 +438,32 @@ export function FileTree({
 
   const handleDuplicate = useCallback(
     (path: string) => {
+      if (onDuplicatePath) {
+        onDuplicatePath(path)
+        return
+      }
       const file = files.find((f) => f.path === path)
-      if (!file) return
-      const ext = path.includes(".") ? path.substring(path.lastIndexOf(".")) : ""
-      const base = ext ? path.substring(0, path.lastIndexOf(".")) : path
-      const newPath = `${base} (copy)${ext}`
-      onCreateFile?.(newPath)
+      if (file) {
+        const ext = path.includes(".") ? path.substring(path.lastIndexOf(".")) : ""
+        const base = ext ? path.substring(0, path.lastIndexOf(".")) : path
+        const newPath = `${base} (copy)${ext}`
+        onCreateFile?.(newPath)
+        return
+      }
+
+      const folderPrefix = path.endsWith("/") ? path : `${path}/`
+      const descendants = files.filter((f) => f.path.startsWith(folderPrefix))
+      if (descendants.length === 0) return
+
+      const folderName = path.split("/").pop() ?? "folder"
+      const parentPath = path.substring(0, path.lastIndexOf("/"))
+      const copiedFolderPath = `${parentPath}/${folderName} (copy)`
+      for (const descendant of descendants) {
+        const suffix = descendant.path.slice(path.length)
+        onCreateFile?.(`${copiedFolderPath}${suffix}`)
+      }
     },
-    [files, onCreateFile]
+    [files, onCreateFile, onDuplicatePath]
   )
 
   const handleStartInlineCreate = useCallback(
@@ -660,16 +682,30 @@ function TreeNodeItem({
   onCreateCancel: () => void
 }) {
   const isExpanded = expandedDirs.has(node.path)
+  const isRenamingDir = renamingPath === node.path
+  const dirRenameInputRef = useRef<HTMLInputElement>(null)
+  const [dirRenameValue, setDirRenameValue] = useState(node.name)
   const presenceForFile = presence.filter(
     (p) => p.activeFile === node.path && p.isOnline
   )
+
+  useEffect(() => {
+    if (!isRenamingDir) return
+    queueMicrotask(() => {
+      setDirRenameValue(node.name)
+    })
+    setTimeout(() => {
+      dirRenameInputRef.current?.focus()
+      dirRenameInputRef.current?.select()
+    }, 0)
+  }, [isRenamingDir, node.name])
 
   if (node.isDir) {
     const isCreatingHere = creatingIn?.parentPath === node.path
     return (
       <div>
         <button
-          onClick={() => onToggleDir(node.path)}
+          onClick={() => !isRenamingDir && onToggleDir(node.path)}
           onContextMenu={(e) => onContextMenu(e, node.path, true)}
           className={cn(
             "flex w-full items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors hover:bg-hover",
@@ -688,7 +724,32 @@ function TreeNodeItem({
           ) : (
             <Folder className="h-4 w-4 text-text-tertiary" />
           )}
-          <span className="truncate">{node.name}</span>
+          {isRenamingDir ? (
+            <input
+              ref={dirRenameInputRef}
+              value={dirRenameValue}
+              onChange={(e) => setDirRenameValue(e.target.value)}
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  onRenameSubmit(node.path, dirRenameValue)
+                } else if (e.key === "Escape") {
+                  onRenameCancel()
+                }
+              }}
+              onBlur={() => {
+                if (dirRenameValue.trim() && dirRenameValue.trim() !== node.name) {
+                  onRenameSubmit(node.path, dirRenameValue)
+                } else {
+                  onRenameCancel()
+                }
+              }}
+              className="flex-1 bg-transparent text-xs text-text-primary outline-none"
+              spellCheck={false}
+            />
+          ) : (
+            <span className="truncate">{node.name}</span>
+          )}
         </button>
         <AnimatePresence initial={false}>
           {isExpanded && (
@@ -779,7 +840,9 @@ function FileItem({
 
   useEffect(() => {
     if (isRenaming) {
-      setRenameValue(fileName)
+      queueMicrotask(() => {
+        setRenameValue(fileName)
+      })
       // Focus after render
       setTimeout(() => {
         renameInputRef.current?.focus()

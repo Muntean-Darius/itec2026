@@ -79,6 +79,7 @@ const MAIN_EDITOR_MIN_WIDTH = 360
 const RESIZE_HANDLE_THICKNESS = 1
 const AI_PANEL_OPEN_KEY = (projectId: string) => `itecify:${projectId}:ai-panel-open`
 const ACTIVE_FILE_KEY = (projectId: string) => `itecify:${projectId}:active-file`
+const OPEN_FILES_KEY = (projectId: string) => `itecify:${projectId}:open-files`
 
 export function WorkspaceShell({
   project,
@@ -172,6 +173,11 @@ export function WorkspaceShell({
     window.localStorage.setItem(ACTIVE_FILE_KEY(project.id), activeFilePath)
   }, [project.id, activeFilePath])
 
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    window.localStorage.setItem(OPEN_FILES_KEY(project.id), JSON.stringify(openFiles))
+  }, [project.id, openFiles])
+
   const resolveSnapshotFileStates = useCallback(
     (snapshot: Snapshot | null): Record<string, string> | null => {
       if (!snapshot) return null
@@ -233,13 +239,31 @@ export function WorkspaceShell({
     if (restoredWorkspacePrefsRef.current === project.id) return
 
     restoredWorkspacePrefsRef.current = project.id
+    const filesSet = new Set(files.map((f) => f.path))
+    const storedOpenRaw = window.localStorage.getItem(OPEN_FILES_KEY(project.id))
+    let storedOpenFiles: unknown = null
+    if (storedOpenRaw) {
+      try {
+        storedOpenFiles = JSON.parse(storedOpenRaw) as unknown
+      } catch {
+        storedOpenFiles = null
+      }
+    }
+    const validStoredOpenFiles = Array.isArray(storedOpenFiles)
+      ? storedOpenFiles.filter((p): p is string => typeof p === "string" && filesSet.has(p))
+      : []
     const storedActiveFile = window.localStorage.getItem(ACTIVE_FILE_KEY(project.id))
-    if (!storedActiveFile) return
-    if (!files.some((file) => file.path === storedActiveFile)) return
+    const validStoredActiveFile = storedActiveFile && filesSet.has(storedActiveFile) ? storedActiveFile : null
 
-    setActiveFilePath(storedActiveFile)
-    setOpenFiles((prev) => (prev.includes(storedActiveFile) ? prev : [...prev, storedActiveFile]))
-    collab.updateAwareness({ activeFile: storedActiveFile })
+    if (validStoredOpenFiles.length > 0) {
+      setOpenFiles(validStoredOpenFiles)
+    }
+    const restoredActiveFile = validStoredActiveFile ?? validStoredOpenFiles[0]
+    if (!restoredActiveFile) return
+
+    setActiveFilePath(restoredActiveFile)
+    setOpenFiles((prev) => (prev.includes(restoredActiveFile) ? prev : [...prev, restoredActiveFile]))
+    collab.updateAwareness({ activeFile: restoredActiveFile })
   }, [project.id, files, collab])
 
   // Active terminal session
@@ -404,13 +428,100 @@ export function WorkspaceShell({
     [activeFilePath]
   )
 
+  const handleRenamePath = useCallback(
+    (oldPath: string, newPath: string) => {
+      const normalizedOld = oldPath.startsWith("/") ? oldPath : `/${oldPath}`
+      const normalizedNew = newPath.startsWith("/") ? newPath : `/${newPath}`
+      const exactMatch = files.some((f) => f.path === normalizedOld)
+      const prefix = normalizedOld.endsWith("/") ? normalizedOld : `${normalizedOld}/`
+      const targets = exactMatch
+        ? [normalizedOld]
+        : files
+            .filter((f) => f.path === normalizedOld || f.path.startsWith(prefix))
+            .map((f) => f.path)
+
+      if (targets.length === 0) return
+
+      for (const target of targets) {
+        const suffix = target.slice(normalizedOld.length)
+        collab.renameFile(target, `${normalizedNew}${suffix}`)
+      }
+
+      setOpenFiles((prev) =>
+        prev.map((path) => {
+          const isMatch = path === normalizedOld || path.startsWith(prefix)
+          if (!isMatch) return path
+          const suffix = path.slice(normalizedOld.length)
+          return `${normalizedNew}${suffix}`
+        })
+      )
+
+      if (activeFilePath === normalizedOld || activeFilePath.startsWith(prefix)) {
+        const suffix = activeFilePath.slice(normalizedOld.length)
+        const nextActive = `${normalizedNew}${suffix}`
+        setActiveFilePath(nextActive)
+        collab.updateAwareness({ activeFile: nextActive })
+      }
+    },
+    [activeFilePath, collab, files]
+  )
+
   const handleDeleteFile = useCallback(
     (path: string) => {
-      collab.deleteFile(path)
-      // Also close the tab if open
-      handleCloseTab(path)
+      const normalizedPath = path.startsWith("/") ? path : `/${path}`
+      const exactMatch = files.some((f) => f.path === normalizedPath)
+      const prefix = normalizedPath.endsWith("/") ? normalizedPath : `${normalizedPath}/`
+      const targets = exactMatch
+        ? [normalizedPath]
+        : files
+            .filter((f) => f.path === normalizedPath || f.path.startsWith(prefix))
+            .map((f) => f.path)
+
+      if (targets.length === 0) return
+      for (const target of targets) {
+        collab.deleteFile(target)
+      }
+
+      const removed = new Set(targets)
+      setOpenFiles((prev) => {
+        const next = prev.filter((p) => !removed.has(p))
+        if (removed.has(activeFilePath)) {
+          setActiveFilePath(next[next.length - 1] ?? "")
+        }
+        return next
+      })
     },
-    [collab, handleCloseTab]
+    [activeFilePath, collab, files]
+  )
+
+  const handleDuplicatePath = useCallback(
+    (path: string) => {
+      const normalizedPath = path.startsWith("/") ? path : `/${path}`
+      const sourceFile = files.find((f) => f.path === normalizedPath)
+      if (sourceFile) {
+        const ext = normalizedPath.includes(".") ? normalizedPath.substring(normalizedPath.lastIndexOf(".")) : ""
+        const base = ext ? normalizedPath.substring(0, normalizedPath.lastIndexOf(".")) : normalizedPath
+        const duplicatePath = `${base} (copy)${ext}`
+        collab.createFile(duplicatePath)
+        collab.updateFileContent(duplicatePath, sourceFile.content)
+        return
+      }
+
+      const prefix = normalizedPath.endsWith("/") ? normalizedPath : `${normalizedPath}/`
+      const descendants = files.filter((f) => f.path.startsWith(prefix))
+      if (descendants.length === 0) return
+
+      const folderName = normalizedPath.split("/").pop() ?? "folder"
+      const parentPath = normalizedPath.substring(0, normalizedPath.lastIndexOf("/"))
+      const copiedFolderPath = `${parentPath}/${folderName} (copy)`
+      for (const descendant of descendants) {
+        const suffix = descendant.path.slice(normalizedPath.length)
+        const duplicatePath = `${copiedFolderPath}${suffix}`
+        collab.createFile(duplicatePath)
+        collab.updateFileContent(duplicatePath, descendant.content)
+      }
+    },
+    [collab, files]
   )
 
   const isRunning = activeTerminalId ? (collab.terminalBusy[activeTerminalId] ?? false) : false
@@ -989,8 +1100,9 @@ export function WorkspaceShell({
                     presence={livePresence}
                     onOpenFile={handleOpenFile}
                     onDeleteFile={handleDeleteFile}
-                    onRenameFile={(oldPath, newPath) => collab.renameFile(oldPath, newPath)}
+                    onRenameFile={handleRenamePath}
                     onCreateFile={handleCreateFile}
+                    onDuplicatePath={handleDuplicatePath}
                     createFileTrigger={createFileTrigger}
                   />
                 </TabsContent>
@@ -1499,7 +1611,7 @@ export function WorkspaceShell({
               setActiveFilePath(path)
             }}
             onDeleteFile={handleDeleteFile}
-            onRenameFile={(oldPath, newPath) => collab.renameFile(oldPath, newPath)}
+            onRenameFile={handleRenamePath}
             onCopyPath={(path) => navigator.clipboard?.writeText(path)}
           />
         )}
