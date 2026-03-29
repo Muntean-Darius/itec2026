@@ -168,14 +168,14 @@ export function SourceControlPanel({
   // Not initialized state
   if (!git.initialized && !git.loading) {
     return (
-      <div className={cn("flex flex-col h-full", className)}>
-        <div className="flex items-center justify-between px-3 py-2 border-b border-border-subtle">
+      <div className={cn("flex flex-col h-full min-h-0 overflow-hidden", className)}>
+        <div className="flex items-center justify-between px-3 py-2 border-b border-border-subtle shrink-0">
           <span className="text-xs font-medium text-text-secondary uppercase tracking-wide">
             Source Control
           </span>
         </div>
-        <div className="flex-1 flex flex-col items-center justify-center gap-4 p-6">
-          <GitBranch className="h-12 w-12 text-text-tertiary" />
+        <div className="flex-1 flex flex-col items-center justify-center gap-4 p-6 min-h-0">
+          <GitBranch className="h-12 w-12 text-text-tertiary shrink-0" />
           <div className="text-center">
             <p className="text-sm text-text-secondary mb-1">
               No Git repository
@@ -200,13 +200,13 @@ export function SourceControlPanel({
   // Loading state
   if (git.loading) {
     return (
-      <div className={cn("flex flex-col h-full", className)}>
-        <div className="flex items-center justify-between px-3 py-2 border-b border-border-subtle">
+      <div className={cn("flex flex-col h-full min-h-0 overflow-hidden", className)}>
+        <div className="flex items-center justify-between px-3 py-2 border-b border-border-subtle shrink-0">
           <span className="text-xs font-medium text-text-secondary uppercase tracking-wide">
             Source Control
           </span>
         </div>
-        <div className="flex-1 flex items-center justify-center">
+        <div className="flex-1 flex items-center justify-center min-h-0">
           <Loader2 className="h-6 w-6 text-text-tertiary animate-spin" />
         </div>
       </div>
@@ -214,9 +214,9 @@ export function SourceControlPanel({
   }
 
   return (
-    <div className={cn("flex flex-col h-full", className)}>
+    <div className={cn("flex flex-col h-full min-h-0 overflow-hidden", className)}>
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-border-subtle">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-border-subtle shrink-0">
         <span className="text-xs font-medium text-text-secondary uppercase tracking-wide">
           Source Control
         </span>
@@ -237,8 +237,8 @@ export function SourceControlPanel({
         </div>
       </div>
 
-      <ScrollArea className="flex-1">
-        <div className="p-2">
+      <ScrollArea className="flex-1 min-h-0">
+        <div className="p-2 overflow-hidden">
           {/* Commit Form */}
           <div className="mb-3">
             <Input
@@ -262,31 +262,31 @@ export function SourceControlPanel({
               <Button
                 size="sm"
                 variant="outline"
-                className="h-7 text-xs gap-1"
+                className="h-7 text-xs gap-1 min-w-0 px-1.5"
                 disabled={!remoteConnected || git.syncing}
                 onClick={() => git.fetch()}
               >
-                <Download className="h-3.5 w-3.5" />
-                Fetch
+                <Download className="h-3 w-3 shrink-0" />
+                <span className="truncate">Fetch</span>
               </Button>
               <Button
                 size="sm"
                 variant="outline"
-                className="h-7 text-xs gap-1"
+                className="h-7 text-xs gap-1 min-w-0 px-1.5"
                 disabled={!remoteConnected || git.syncing}
                 onClick={() => git.pull()}
               >
-                <CloudDownload className="h-3.5 w-3.5" />
-                Pull
+                <CloudDownload className="h-3 w-3 shrink-0" />
+                <span className="truncate">Pull</span>
               </Button>
               <Button
                 size="sm"
-                className="h-7 text-xs gap-1"
+                className="h-7 text-xs gap-1 min-w-0 px-1.5"
                 disabled={!remoteConnected || git.syncing}
                 onClick={() => git.push()}
               >
-                <CloudUpload className="h-3.5 w-3.5" />
-                Push
+                <CloudUpload className="h-3 w-3 shrink-0" />
+                <span className="truncate">Push</span>
               </Button>
             </div>
           </div>
@@ -295,29 +295,29 @@ export function SourceControlPanel({
 
           {!remoteConnected ? (
             <>
-              <div className="mb-3 rounded-md border border-border-subtle p-2">
+              <div className="mb-3 rounded-md border border-border-subtle p-2 overflow-hidden">
                 <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-text-secondary">
-                  <Link2 className="h-3.5 w-3.5" />
-                  Connect Remote
+                  <Link2 className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">Connect Remote</span>
                 </div>
                 <Input
-                  placeholder="https://github.com/user/repo.git"
+                  placeholder="github.com/user/repo.git"
                   value={remoteUrl}
                   onChange={(e) => setRemoteUrl(e.target.value)}
-                  className="mb-1 h-8 text-xs"
+                  className="mb-1 h-7 text-xs min-w-0"
                 />
                 <Input
-                  placeholder="GitHub username (optional)"
+                  placeholder="Username (optional)"
                   value={githubUsername}
                   onChange={(e) => setGithubUsername(e.target.value)}
-                  className="mb-1 h-8 text-xs"
+                  className="mb-1 h-7 text-xs min-w-0"
                 />
                 <Input
-                  placeholder="GitHub token (optional for private repos)"
+                  placeholder="Token (optional)"
                   type="password"
                   value={githubToken}
                   onChange={(e) => setGithubToken(e.target.value)}
-                  className="h-8 text-xs"
+                  className="h-7 text-xs min-w-0"
                 />
                 <Button
                   size="sm"
@@ -325,7 +325,7 @@ export function SourceControlPanel({
                   disabled={!remoteUrl.trim() || connectingRemote}
                   onClick={handleConnectRemote}
                 >
-                  {connectingRemote ? "Connecting..." : "Connect Repository"}
+                  {connectingRemote ? "Connecting..." : "Connect"}
                 </Button>
               </div>
               <Separator className="my-2" />

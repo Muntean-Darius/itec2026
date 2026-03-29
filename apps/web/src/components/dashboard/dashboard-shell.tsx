@@ -416,7 +416,10 @@ export function DashboardShell({ user, projects }: DashboardShellProps) {
             <DropdownMenuTrigger asChild>
               <button className="flex items-center gap-2 rounded-full p-1 pr-3 transition-colors hover:bg-hover">
                 <Avatar className="h-7 w-7">
-                  <AvatarFallback className="text-[10px] bg-brand text-brand-foreground">
+                  <AvatarFallback
+                    className="text-[10px]"
+                    style={{ backgroundColor: user.cursorColor, color: "#fff" }}
+                  >
                     {getInitials(user.name)}
                   </AvatarFallback>
                 </Avatar>

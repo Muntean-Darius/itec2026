@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation"
-import { getAuthUser } from "@/data/queries"
+import { getAuthUser, getProject } from "@/data/queries"
 import { PrismaClient } from "@/generated/prisma/client"
 import { PrismaPg } from "@prisma/adapter-pg"
 import { JoinPreview } from "./join-preview"
@@ -51,6 +51,10 @@ export default async function JoinWorkspacePage({ params }: JoinPageProps) {
     redirect(`/workspace/${projectId}`)
   }
 
+  // Use getProject to get the inferred language (analyzes file extensions)
+  const richProject = await getProject(projectId)
+  const inferredLanguage = richProject?.language ?? project.language
+
   // Find the owner
   const ownerMembership = project.memberships.find((m) => m.role === "OWNER")
 
@@ -60,7 +64,7 @@ export default async function JoinWorkspacePage({ params }: JoinPageProps) {
         id: project.id,
         name: project.name,
         description: project.description,
-        language: project.language,
+        language: inferredLanguage,
         createdAt: project.createdAt.toISOString(),
         owner: {
           name: ownerMembership?.user.name ?? "Unknown",

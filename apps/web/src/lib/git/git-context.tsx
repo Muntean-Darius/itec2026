@@ -33,6 +33,34 @@ import {
 export { getFileStatusLabel, isFileStaged, hasUnstagedChanges, hasChanges }
 export type { FileStatus, CommitInfo, GitCredentials, GitAuthor }
 
+// ─── Credential persistence (sessionStorage) ────────────────────────────
+
+function getStorageKey(projectId: string) {
+  return `itecify-git-creds:${projectId}`
+}
+
+function loadCredentials(projectId: string): GitCredentials | undefined {
+  if (typeof window === "undefined") return undefined
+  try {
+    const raw = sessionStorage.getItem(getStorageKey(projectId))
+    if (!raw) return undefined
+    const parsed = JSON.parse(raw)
+    if (parsed?.username && parsed?.password) return parsed as GitCredentials
+  } catch {
+    // Ignore parse errors
+  }
+  return undefined
+}
+
+function saveCredentials(projectId: string, creds: GitCredentials) {
+  if (typeof window === "undefined") return
+  try {
+    sessionStorage.setItem(getStorageKey(projectId), JSON.stringify(creds))
+  } catch {
+    // Ignore quota errors
+  }
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────
 
 export interface GitState {
@@ -116,10 +144,17 @@ export function GitProvider({
     syncing: false,
   })
 
-  // Credentials and author info
-  const [credentials, setCredentials] = useState<GitCredentials | undefined>(
-    initialCredentials
-  )
+  // Credentials and author info — prefer initialCredentials (fresh OAuth token),
+  // fall back to sessionStorage (persisted from previous page load)
+  const [credentials, setCredentials] = useState<GitCredentials | undefined>(() => {
+    if (initialCredentials) {
+      // Fresh token from OAuth — persist it for future page loads
+      saveCredentials(projectId, initialCredentials)
+      return initialCredentials
+    }
+    // Try sessionStorage fallback
+    return loadCredentials(projectId)
+  })
   const [author, setAuthor] = useState<GitAuthor>(
     initialAuthor || { name: "iTECify User", email: "user@itecify.dev" }
   )
@@ -494,7 +529,8 @@ export function GitProvider({
 
   const setCredentialsHandler = useCallback((creds: GitCredentials) => {
     setCredentials(creds)
-  }, [])
+    saveCredentials(projectId, creds)
+  }, [projectId])
 
   const setAuthorHandler = useCallback((newAuthor: GitAuthor) => {
     setAuthor(newAuthor)

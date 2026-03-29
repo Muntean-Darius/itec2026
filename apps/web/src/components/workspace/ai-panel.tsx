@@ -104,9 +104,9 @@ export function AIPanel({
   const activeChat = chatSessions.find((c) => c.id === (activeChatId ?? (chatSessions.length > 0 ? chatSessions[0].id : null)))
 
   return (
-    <div className="flex h-full w-full min-w-0 flex-col overflow-hidden">
+    <div className="flex h-full w-full min-w-0 min-h-0 flex-col overflow-hidden">
       {/* Header */}
-      <div className="flex h-11 shrink-0 items-center justify-between border-b border-border-subtle px-3">
+      <div className="flex h-11 shrink-0 items-center justify-between border-b border-border-subtle px-3 min-w-0">
         <div className="flex items-center gap-2">
           <Bot className="h-4 w-4 text-ai" />
           <span className="text-sm font-medium text-text-primary">AI Workspace</span>
@@ -364,63 +364,81 @@ function ChatView({
   }, [inputValue, selectedAgent, activeChatId, onSendChat, onSelectChat, effectiveChatId, getChatInputYText])
 
   return (
-    <div className="flex flex-1 flex-col overflow-hidden">
+    <div className="flex flex-1 flex-col overflow-hidden min-h-0 min-w-0">
       {/* Chat tabs */}
       {chatSessions.length > 0 && (
-        <div className="flex items-center gap-px border-b border-border-subtle bg-surface overflow-x-auto px-1 py-1">
+        <div className="flex items-center gap-px border-b border-border-subtle bg-surface overflow-x-auto shrink-0 px-1 py-1">
           {chatSessions.map((session) => {
             const agent = agents.find((a) => a.id === session.agentId)
             const isRenaming = renamingChatId === session.id
             return (
-              <button
+              <div
                 key={session.id}
-                onClick={() => onSelectChat(session.id)}
-                onDoubleClick={() => {
-                  setRenamingChatId(session.id)
-                  setRenamingValue(session.name || session.agentName)
-                }}
-                onContextMenu={(e) => {
-                  e.preventDefault()
-                  setContextMenu({ x: e.clientX, y: e.clientY, chatId: session.id })
-                }}
                 className={cn(
-                  "flex items-center gap-1.5 rounded-md px-2 py-1 text-xs whitespace-nowrap transition-colors",
+                  "group/tab flex items-center gap-1 rounded-md px-2 py-1 text-xs whitespace-nowrap transition-colors min-w-0",
                   session.id === activeChatId
                     ? "bg-elevated text-text-primary"
                     : "text-text-tertiary hover:bg-hover/50 hover:text-text-secondary"
                 )}
               >
-                <div
-                  className="h-2 w-2 rounded-full shrink-0"
-                  style={{ backgroundColor: agent?.color ?? "var(--ai)" }}
-                />
-                {isRenaming ? (
-                  <input
-                    ref={renameInputRef}
-                    value={renamingValue}
-                    onChange={(e) => setRenamingValue(e.target.value)}
-                    onBlur={commitRename}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") commitRename()
-                      if (e.key === "Escape") { setRenamingChatId(null); setRenamingValue("") }
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                    className="w-20 bg-elevated border border-border-default rounded px-1 py-0 text-xs text-text-primary outline-none focus:border-brand"
+                <button
+                  onClick={() => onSelectChat(session.id)}
+                  onDoubleClick={() => {
+                    setRenamingChatId(session.id)
+                    setRenamingValue(session.name || session.agentName)
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    setContextMenu({ x: e.clientX, y: e.clientY, chatId: session.id })
+                  }}
+                  className="flex items-center gap-1.5 min-w-0"
+                >
+                  <div
+                    className="h-2 w-2 rounded-full shrink-0"
+                    style={{ backgroundColor: agent?.color ?? "var(--ai)" }}
                   />
-                ) : (
-                  <span className="truncate max-w-[80px]">{session.name || session.agentName}</span>
-                )}
-                {session.isGenerating && (
-                  <Loader2 className="h-3 w-3 animate-spin text-ai" />
-                )}
-              </button>
+                  {isRenaming ? (
+                    <input
+                      ref={renameInputRef}
+                      value={renamingValue}
+                      onChange={(e) => setRenamingValue(e.target.value)}
+                      onBlur={commitRename}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") commitRename()
+                        if (e.key === "Escape") { setRenamingChatId(null); setRenamingValue("") }
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-20 bg-elevated border border-border-default rounded px-1 py-0 text-xs text-text-primary outline-none focus:border-brand"
+                    />
+                  ) : (
+                    <span className="truncate max-w-[80px]">{session.name || session.agentName}</span>
+                  )}
+                  {session.isGenerating && (
+                    <Loader2 className="h-3 w-3 animate-spin text-ai shrink-0" />
+                  )}
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setDeletingChatId(session.id)
+                  }}
+                  className={cn(
+                    "shrink-0 rounded p-0.5 transition-colors hover:bg-hover",
+                    session.id === activeChatId
+                      ? "opacity-60 hover:opacity-100"
+                      : "opacity-0 group-hover/tab:opacity-60 group-hover/tab:hover:opacity-100"
+                  )}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
             )
           })}
           <Tooltip>
             <TooltipTrigger asChild>
               <button
                 onClick={() => onNewChat()}
-                className="flex items-center justify-center h-6 w-6 rounded-md text-text-tertiary hover:bg-hover hover:text-text-secondary transition-colors ml-1"
+                className="flex items-center justify-center h-6 w-6 rounded-md text-text-tertiary hover:bg-hover hover:text-text-secondary transition-colors ml-1 shrink-0"
               >
                 <Plus className="h-3.5 w-3.5" />
               </button>
@@ -470,8 +488,8 @@ function ChatView({
       </AnimatePresence>
 
       {/* Messages */}
-      <ScrollArea className="flex-1" ref={scrollRef}>
-        <div className="p-3 space-y-3">
+      <ScrollArea className="flex-1 min-h-0" ref={scrollRef}>
+        <div className="p-3 space-y-3 overflow-hidden">
           {!activeChat && chatSessions.length === 0 && (
             <EmptyState agents={activeAgents} onStartChat={(agentId) => {
               if (agentId) {
@@ -517,9 +535,9 @@ function ChatView({
       </ScrollArea>
 
       {/* Input area */}
-      <div className="border-t border-border-subtle p-2">
+      <div className="border-t border-border-subtle p-2 shrink-0 min-w-0">
         {/* Agent selector */}
-        <div className="flex items-center gap-1.5 mb-2">
+        <div className="flex items-center gap-1.5 mb-2 min-w-0 overflow-hidden">
           {selectedAgent && (
             <button
               onClick={() => setShowAgentPicker(!showAgentPicker)}
@@ -531,7 +549,7 @@ function ChatView({
             </button>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 min-w-0">
           <Input
             ref={inputRef}
             value={inputValue}
@@ -544,7 +562,7 @@ function ChatView({
                 handleSend()
               }
             }}
-            className="h-8 border-0 bg-elevated focus-visible:ring-0 text-sm placeholder:text-text-tertiary"
+            className="h-8 border-0 bg-elevated focus-visible:ring-0 text-sm placeholder:text-text-tertiary min-w-0"
           />
           <Button
             size="icon"

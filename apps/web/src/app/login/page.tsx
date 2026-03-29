@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { motion } from "framer-motion"
 import { Code2, ArrowRight, GitBranch, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -72,6 +72,17 @@ export default function LoginPage() {
   const [email, setEmail] = useState("")
   const [loading, setLoading] = useState(false)
 
+  // Show error from auth callback redirect (e.g. ?error=some+message)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const err = params.get("error")
+    if (err) {
+      toast.error("Sign-in failed", { description: decodeURIComponent(err) })
+      // Clean URL without reload
+      window.history.replaceState({}, "", "/login")
+    }
+  }, [])
+
   const handleGitHubLogin = async () => {
     setLoading(true)
     const supabase = createClient()
@@ -79,6 +90,7 @@ export default function LoginPage() {
       provider: "github",
       options: {
         redirectTo: `${getURL()}/auth/callback`,
+        scopes: "repo",
       },
     })
     if (error) {
