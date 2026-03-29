@@ -15,6 +15,7 @@ import {
   type ReactNode,
 } from "react"
 import { toast } from "sonner"
+import { createClient as createSupabaseClient } from "@/lib/supabase/client"
 import { createYjsFsAdapter, type YjsFsAdapter } from "./yjs-fs-adapter"
 import {
   createGitOperations,
@@ -128,6 +129,55 @@ export function GitProvider({
   const fsRef = useRef<YjsFsAdapter | null>(null)
   const gitRef = useRef<GitOperations | null>(null)
   const initPromiseRef = useRef<Promise<void> | null>(null)
+
+  // Hydrate credentials from browser Supabase session (provider_token).
+  // This fixes cases where server-passed credentials are unavailable/stale.
+  useEffect(() => {
+    const supabase = createSupabaseClient()
+    let active = true
+
+    const extractCredentialsFromSession = (session: unknown): GitCredentials | undefined => {
+      if (!session || typeof session !== "object") return undefined
+      const s = session as {
+        provider_token?: string
+        user?: {
+          app_metadata?: { provider?: string }
+          user_metadata?: Record<string, unknown>
+        }
+      }
+      if (s.user?.app_metadata?.provider !== "github" || !s.provider_token) {
+        return undefined
+      }
+      const meta = s.user.user_metadata ?? {}
+      const username =
+        (typeof meta.user_name === "string" && meta.user_name) ||
+        (typeof meta.preferred_username === "string" && meta.preferred_username) ||
+        (typeof meta.name === "string" && meta.name) ||
+        "oauth2"
+      return { username, password: s.provider_token }
+    }
+
+    void supabase.auth.getSession().then(({ data }) => {
+      if (!active) return
+      const nextCreds = extractCredentialsFromSession(data.session)
+      if (nextCreds) {
+        setCredentials(nextCreds)
+      }
+    })
+
+    const { data: authSub } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!active) return
+      const nextCreds = extractCredentialsFromSession(session)
+      if (nextCreds) {
+        setCredentials(nextCreds)
+      }
+    })
+
+    return () => {
+      active = false
+      authSub.subscription.unsubscribe()
+    }
+  }, [])
 
   // Internal status refresh - defined before useEffect that uses it
   const refreshStatusInternal = useCallback(async () => {
@@ -409,7 +459,7 @@ export function GitProvider({
   const push = useCallback(async () => {
     const git = gitRef.current
     if (!git || !credentials) {
-      toast.error("GitHub credentials required for push")
+      toast.error("GitHub OAuth token missing. Re-login with GitHub and try again.")
       return
     }
 
@@ -429,7 +479,7 @@ export function GitProvider({
   const pull = useCallback(async () => {
     const git = gitRef.current
     if (!git || !credentials) {
-      toast.error("GitHub credentials required for pull")
+      toast.error("GitHub OAuth token missing. Re-login with GitHub and try again.")
       return
     }
 
@@ -449,7 +499,7 @@ export function GitProvider({
   const fetch = useCallback(async () => {
     const git = gitRef.current
     if (!git || !credentials) {
-      toast.error("GitHub credentials required for fetch")
+      toast.error("GitHub OAuth token missing. Re-login with GitHub and try again.")
       return
     }
 

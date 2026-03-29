@@ -52,8 +52,6 @@ export function SourceControlPanel({
   const git = useGit()
   const [commitMessage, setCommitMessage] = useState("")
   const [remoteUrl, setRemoteUrl] = useState("")
-  const [githubUsername, setGithubUsername] = useState("")
-  const [githubToken, setGithubToken] = useState("")
   const [connectingRemote, setConnectingRemote] = useState(false)
   const [changesExpanded, setChangesExpanded] = useState(true)
   const [stagedExpanded, setStagedExpanded] = useState(true)
@@ -113,19 +111,11 @@ export function SourceControlPanel({
     setConnectingRemote(true)
     try {
       await git.addRemote("origin", normalizedUrl)
-      if (githubToken.trim()) {
-        git.setCredentials({
-          username: githubUsername.trim() || "oauth2",
-          password: githubToken.trim(),
-        })
-      }
       setRemoteUrl("")
-      setGithubUsername("")
-      setGithubToken("")
     } finally {
       setConnectingRemote(false)
     }
-  }, [git, githubToken, githubUsername, normalizeRemoteUrl, remoteUrl])
+  }, [git, normalizeRemoteUrl, remoteUrl])
 
   // Get icon for file status
   const getStatusIcon = (status: FileStatus) => {
@@ -304,19 +294,6 @@ export function SourceControlPanel({
                   placeholder="https://github.com/user/repo.git"
                   value={remoteUrl}
                   onChange={(e) => setRemoteUrl(e.target.value)}
-                  className="mb-1 h-8 text-xs"
-                />
-                <Input
-                  placeholder="GitHub username (optional)"
-                  value={githubUsername}
-                  onChange={(e) => setGithubUsername(e.target.value)}
-                  className="mb-1 h-8 text-xs"
-                />
-                <Input
-                  placeholder="GitHub token (optional for private repos)"
-                  type="password"
-                  value={githubToken}
-                  onChange={(e) => setGithubToken(e.target.value)}
                   className="h-8 text-xs"
                 />
                 <Button
