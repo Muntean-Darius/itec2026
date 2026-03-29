@@ -50,6 +50,19 @@ function getAuthErrorMessage(errorMsg: string, method: "GitHub" | "email"): { ti
   }
 }
 
+const getURL = () => {
+  let url =
+    process?.env?.NEXT_PUBLIC_SITE_URL ??
+    process?.env?.NEXT_PUBLIC_VERCEL_URL ??
+    'http://localhost:3000';
+
+  url = url.includes('http') ? url : `https://${url}`;
+
+  url = url.charAt(url.length - 1) === '/' ? url.slice(0, -1) : url;
+
+  return url;
+};
+
 export default function LoginPage() {
   const [email, setEmail] = useState("")
   const [loading, setLoading] = useState(false)
@@ -60,7 +73,7 @@ export default function LoginPage() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "github",
       options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
+        redirectTo: `${getURL()}/auth/callback`,
       },
     })
     if (error) {
@@ -77,7 +90,7 @@ export default function LoginPage() {
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        emailRedirectTo: `${getURL()}/auth/callback`,
       },
     })
     if (error) {
