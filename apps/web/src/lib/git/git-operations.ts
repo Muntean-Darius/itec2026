@@ -66,9 +66,9 @@ export interface GitOperations {
   /** Push to remote */
   push: (credentials: GitCredentials, remote?: string, branch?: string) => Promise<void>
   /** Pull from remote */
-  pull: (credentials: GitCredentials, remote?: string, branch?: string) => Promise<void>
+  pull: (credentials?: GitCredentials, remote?: string, branch?: string) => Promise<void>
   /** Fetch from remote */
-  fetch: (credentials: GitCredentials, remote?: string) => Promise<void>
+  fetch: (credentials?: GitCredentials, remote?: string) => Promise<void>
   /** Add a remote */
   addRemote: (name: string, url: string) => Promise<void>
   /** List remotes */
@@ -215,7 +215,7 @@ export function createGitOperations(
   }
 
   const pull = async (
-    credentials: GitCredentials,
+    credentials?: GitCredentials,
     remote: string = "origin",
     branch?: string
   ): Promise<void> => {
@@ -229,19 +229,28 @@ export function createGitOperations(
       ref,
       corsProxy: CORS_PROXY,
       singleBranch: true,
-      author: { name: credentials.username, email: `${credentials.username}@users.noreply.github.com` },
-      onAuth: () => ({ username: credentials.username, password: credentials.password }),
+      author: {
+        name: credentials?.username || "iTECify User",
+        email: credentials?.username
+          ? `${credentials.username}@users.noreply.github.com`
+          : "user@itecify.dev",
+      },
+      onAuth: credentials
+        ? () => ({ username: credentials.username, password: credentials.password })
+        : undefined,
     })
   }
 
-  const fetch = async (credentials: GitCredentials, remote: string = "origin"): Promise<void> => {
+  const fetch = async (credentials?: GitCredentials, remote: string = "origin"): Promise<void> => {
     await git.fetch({
       ...commonOpts,
       http,
       remote,
       corsProxy: CORS_PROXY,
       singleBranch: true,
-      onAuth: () => ({ username: credentials.username, password: credentials.password }),
+      onAuth: credentials
+        ? () => ({ username: credentials.username, password: credentials.password })
+        : undefined,
     })
   }
 

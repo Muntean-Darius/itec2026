@@ -478,8 +478,7 @@ export function GitProvider({
 
   const pull = useCallback(async () => {
     const git = gitRef.current
-    if (!git || !credentials) {
-      toast.error("GitHub OAuth token missing. Re-login with GitHub and try again.")
+    if (!git) {
       return
     }
 
@@ -498,8 +497,7 @@ export function GitProvider({
 
   const fetch = useCallback(async () => {
     const git = gitRef.current
-    if (!git || !credentials) {
-      toast.error("GitHub OAuth token missing. Re-login with GitHub and try again.")
+    if (!git) {
       return
     }
 
