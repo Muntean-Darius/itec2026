@@ -9,7 +9,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import Docker from "dockerode"
-import { PassThrough } from "node:stream"
+import { PassThrough, Readable } from "node:stream"
 import * as fs from "node:fs"
 import * as path from "node:path"
 
@@ -274,6 +274,11 @@ WRAPPER`,
     // Write initial files into the container
     await syncFilesToContainer(projectId, files)
 
+    // Ensure all files are owned by the sandbox user so terminal commands work
+    try {
+      await execInContainer(entry, ["chown", "-R", "itecify:itecify", CONTAINER_WORKDIR])
+    } catch { /* non-critical */ }
+
     entry.status = "ready"
     emitStatus(projectId, "ready")
     console.log(`[iTECify Docker] Container started for project ${projectId}: ${container.id.slice(0, 12)}`)
@@ -400,45 +405,153 @@ export async function resetContainer(
   await ensureContainer(projectId, files)
 }
 
+// ─── Tar Archive Helpers ─────────────────────────────────────────────────
+
+/**
+ * Build a tar archive buffer containing all files.
+ * Uses USTAR format so Docker putArchive can extract them directly.
+ */
+function buildTarBuffer(files: Map<string, string>): Buffer {
+  const blocks: Buffer[] = []
+
+  // Collect all parent directories that need entries
+  const dirs = new Set<string>()
+  for (const filePath of files.keys()) {
+    const parts = filePath.split("/")
+    for (let i = 1; i < parts.length; i++) {
+      dirs.add(parts.slice(0, i).join("/") + "/")
+    }
+  }
+
+  // Write directory entries (sorted so parents come first)
+  for (const dir of [...dirs].sort()) {
+    blocks.push(buildTarHeader(dir, 0, "5", 0o755))
+  }
+
+  // Write file entries
+  for (const [filePath, content] of files) {
+    const data = Buffer.from(content, "utf-8")
+    blocks.push(buildTarHeader(filePath, data.length, "0", 0o644))
+    blocks.push(data)
+    const remainder = data.length % 512
+    if (remainder > 0) {
+      blocks.push(Buffer.alloc(512 - remainder, 0))
+    }
+  }
+
+  // End-of-archive marker: two 512-byte zero blocks
+  blocks.push(Buffer.alloc(1024, 0))
+  return Buffer.concat(blocks)
+}
+
+/**
+ * Build a single USTAR tar header (512 bytes).
+ */
+function buildTarHeader(
+  name: string,
+  size: number,
+  typeflag: string,
+  mode: number,
+): Buffer {
+  const header = Buffer.alloc(512, 0)
+
+  // Handle long paths using USTAR prefix field (prefix ≤155, name ≤100)
+  let prefix = ""
+  let shortName = name
+  if (Buffer.byteLength(name, "utf-8") > 100) {
+    const sepIdx = name.lastIndexOf("/", 99)
+    if (sepIdx > 0) {
+      prefix = name.substring(0, sepIdx)
+      shortName = name.substring(sepIdx + 1)
+    }
+  }
+
+  header.write(shortName, 0, 100, "utf-8")                          // name       (0-99)
+  header.write(mode.toString(8).padStart(7, "0") + "\0", 100, 8, "utf-8") // mode  (100-107)
+  header.write("0001750\0", 108, 8, "utf-8")                        // uid 1000   (108-115)
+  header.write("0001750\0", 116, 8, "utf-8")                        // gid 1000   (116-123)
+  header.write(size.toString(8).padStart(11, "0") + "\0", 124, 12, "utf-8") // size (124-135)
+  const mtime = Math.floor(Date.now() / 1000)
+  header.write(mtime.toString(8).padStart(11, "0") + "\0", 136, 12, "utf-8") // mtime (136-147)
+  header.fill(0x20, 148, 156)                                       // checksum placeholder (spaces)
+  header[156] = typeflag.charCodeAt(0)                               // typeflag   (156)
+  header.write("ustar\0", 257, 6, "utf-8")                          // magic      (257-262)
+  header.write("00", 263, 2, "utf-8")                                // version    (263-264)
+  header.write("itecify", 265, 32, "utf-8")                          // uname      (265-296)
+  header.write("itecify", 297, 32, "utf-8")                          // gname      (297-328)
+  if (prefix) {
+    header.write(prefix, 345, 155, "utf-8")                          // prefix     (345-499)
+  }
+
+  // Compute and write checksum (sum of all bytes, treating checksum field as spaces)
+  let checksum = 0
+  for (let i = 0; i < 512; i++) checksum += header[i]
+  header.write(checksum.toString(8).padStart(6, "0") + "\0 ", 148, 8, "utf-8")
+
+  return header
+}
+
 // ─── File Sync ───────────────────────────────────────────────────────────
 
 /**
- * Write files from the Yjs doc into the container filesystem.
- * Uses a single exec call with a shell script for efficiency.
+ * Write files into the container filesystem.
+ *
+ * Primary strategy: uses Docker's putArchive API (tar-based) which avoids
+ * all shell escaping, argument-length limits, and exit-code issues.
+ *
+ * Fallback: writes files in small batches via shell exec if putArchive fails.
  */
 export async function syncFilesToContainer(
   projectId: string,
   files: Map<string, string>,
 ): Promise<void> {
   const entry = containers.get(projectId)
-  if (!entry || entry.status !== "ready" && entry.status !== "creating") return
+  if (!entry || (entry.status !== "ready" && entry.status !== "creating")) return
   if (files.size === 0) return
 
-  // Build a batch script that creates dirs and writes all files in one exec
-  const commands: string[] = []
-  for (const [filePath, content] of files) {
-    const dir = filePath.substring(0, filePath.lastIndexOf("/")) || "."
-    const b64 = Buffer.from(content, "utf-8").toString("base64")
-    commands.push(`mkdir -p "${CONTAINER_WORKDIR}/${dir}"`)
-    commands.push(`echo '${b64}' | base64 -d > "${CONTAINER_WORKDIR}/${filePath}"`)
+  // ── Fast path: putArchive (tar-based, no shell) ──
+  try {
+    const tarBuffer = buildTarBuffer(files)
+    const stream = Readable.from([tarBuffer])
+    await entry.container.putArchive(stream, { path: CONTAINER_WORKDIR })
+    console.log(`[iTECify Docker] Wrote ${files.size} files via putArchive for ${projectId}`)
+    return
+  } catch (err) {
+    console.warn(`[iTECify Docker] putArchive failed for ${projectId}, falling back to exec:`, (err as Error).message)
   }
 
-  try {
-    await execInContainer(entry, ["sh", "-c", commands.join(" && ")])
-  } catch (err) {
-    console.warn(`[iTECify Docker] Batch file write failed, falling back to individual writes:`, err)
-    // Fallback: write files individually
-    for (const [filePath, content] of files) {
-      try {
-        const dir = filePath.substring(0, filePath.lastIndexOf("/")) || "."
-        await execInContainer(entry, ["mkdir", "-p", `${CONTAINER_WORKDIR}/${dir}`])
-        const b64 = Buffer.from(content, "utf-8").toString("base64")
-        await execInContainer(entry, [
-          "sh", "-c",
-          `echo '${b64}' | base64 -d > ${CONTAINER_WORKDIR}/${filePath}`,
-        ])
-      } catch (innerErr) {
-        console.warn(`[iTECify Docker] Failed to write ${filePath} to container:`, innerErr)
+  // ── Fallback: shell exec in small batches ──
+  // Use ';' instead of '&&' so one file's failure doesn't skip the rest.
+  const BATCH_SIZE = 5
+  const entries = Array.from(files.entries())
+
+  for (let i = 0; i < entries.length; i += BATCH_SIZE) {
+    const batch = entries.slice(i, i + BATCH_SIZE)
+    const commands: string[] = []
+
+    for (const [filePath, content] of batch) {
+      const dir = filePath.substring(0, filePath.lastIndexOf("/")) || "."
+      const b64 = Buffer.from(content, "utf-8").toString("base64")
+      commands.push(`mkdir -p "${CONTAINER_WORKDIR}/${dir}"`)
+      commands.push(`echo '${b64}' | base64 -d > "${CONTAINER_WORKDIR}/${filePath}"`)
+    }
+
+    try {
+      await execInContainer(entry, ["sh", "-c", commands.join(" ; ")])
+    } catch {
+      // If the batch fails, try individual writes
+      for (const [filePath, content] of batch) {
+        try {
+          const dir = filePath.substring(0, filePath.lastIndexOf("/")) || "."
+          await execInContainer(entry, ["mkdir", "-p", `${CONTAINER_WORKDIR}/${dir}`])
+          const b64 = Buffer.from(content, "utf-8").toString("base64")
+          await execInContainer(entry, [
+            "sh", "-c",
+            `echo '${b64}' | base64 -d > "${CONTAINER_WORKDIR}/${filePath}"`,
+          ])
+        } catch (innerErr) {
+          console.warn(`[iTECify Docker] Failed to write ${filePath}:`, innerErr)
+        }
       }
     }
   }

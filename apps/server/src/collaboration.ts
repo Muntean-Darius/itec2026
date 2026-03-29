@@ -118,7 +118,7 @@ function getOrCreateRoom(projectId: string, io?: SocketIOServer): ProjectRoom {
       setTimeout(() => {
         if (room!.users.size === 0) {
           if (room!.snapshotTimer) clearInterval(room!.snapshotTimer)
-          loadedRooms.delete(projectId)
+          loadingRooms.delete(projectId)
           awareness.destroy()
           doc.destroy()
           rooms.delete(projectId)
@@ -140,11 +140,21 @@ function getOrCreateRoom(projectId: string, io?: SocketIOServer): ProjectRoom {
  * - Client snapshots: blob is JSON.stringify(fileStates) — NOT a valid Yjs update
  *
  * When the blob is invalid, falls back to reconstructing the doc from fileStates.
+ *
+ * Uses a Promise-based lock so that concurrent callers (e.g. React reconnect,
+ * strict-mode double-mount) await the first load instead of reading an empty doc.
  */
-const loadedRooms = new Set<string>()
+const loadingRooms = new Map<string, Promise<void>>()
 async function ensureSnapshotLoaded(projectId: string, room: ProjectRoom) {
-  if (loadedRooms.has(projectId)) return
-  loadedRooms.add(projectId)
+  const existing = loadingRooms.get(projectId)
+  if (existing) return existing
+
+  const promise = loadSnapshotImpl(projectId, room)
+  loadingRooms.set(projectId, promise)
+  return promise
+}
+
+async function loadSnapshotImpl(projectId: string, room: ProjectRoom) {
   try {
     const result = await loadLatestSnapshot(projectId)
     if (!result) {
