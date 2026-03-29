@@ -841,7 +841,7 @@ export function WorkspaceShell({
                   </TabsTrigger>
                 </TabsList>
 
-                <TabsContent value="files" className="flex-1 overflow-hidden m-0">
+                <TabsContent value="files" className="flex-1 overflow-hidden m-0 min-h-0 data-[state=active]:flex data-[state=active]:flex-col">
                   <FileTree
                     files={files}
                     activeFilePath={activeFilePath}
@@ -854,7 +854,7 @@ export function WorkspaceShell({
                   />
                 </TabsContent>
 
-                <TabsContent value="search" className="flex-1 overflow-hidden m-0">
+                <TabsContent value="search" className="flex-1 overflow-hidden m-0 min-h-0 data-[state=active]:flex data-[state=active]:flex-col">
                   <SearchPanel
                     files={files}
                     onNavigateTo={handleNavigateTo}
@@ -867,7 +867,7 @@ export function WorkspaceShell({
                   />
                 </TabsContent>
 
-                <TabsContent value="git" className="flex-1 overflow-hidden m-0">
+                <TabsContent value="git" className="flex-1 overflow-hidden m-0 min-h-0 data-[state=active]:flex data-[state=active]:flex-col">
                   <SourceControlPanel
                     onViewDiff={(filepath) => setDiffViewPath(filepath)}
                   />
