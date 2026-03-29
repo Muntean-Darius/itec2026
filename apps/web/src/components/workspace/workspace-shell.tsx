@@ -130,6 +130,7 @@ export function WorkspaceShell({
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
   const [linkCopied, setLinkCopied] = useState(false)
   const [tabContextMenu, setTabContextMenu] = useState<{ x: number; y: number; path: string } | null>(null)
+  const [editorRevealLine, setEditorRevealLine] = useState<number | null>(null)
   const shareUrl = typeof window !== "undefined"
     ? getWorkspaceInviteUrl(project.id, window.location.origin)
     : ""
@@ -335,6 +336,15 @@ export function WorkspaceShell({
       collab.updateAwareness({ activeFile: normalized })
     },
     [collab]
+  )
+
+  // Navigate to a specific file + line (used by Search panel)
+  const handleNavigateTo = useCallback(
+    (path: string, line: number) => {
+      handleOpenFile(path)
+      setEditorRevealLine(line)
+    },
+    [handleOpenFile]
   )
 
   const handleCloseTab = useCallback(
@@ -847,7 +857,7 @@ export function WorkspaceShell({
                 <TabsContent value="search" className="flex-1 overflow-hidden m-0">
                   <SearchPanel
                     files={files}
-                    onOpenFile={handleOpenFile}
+                    onNavigateTo={handleNavigateTo}
                     onReplaceInFile={(path, search, replacement) => {
                       const file = files.find((f) => f.path === path)
                       if (!file) return
@@ -973,6 +983,7 @@ export function WorkspaceShell({
                   recentUndos={recentAIUndos}
                   onQuickUndo={handleQuickUndo}
                   onQuickRedo={handleQuickRedo}
+                  revealLine={editorRevealLine}
                 />
               </>
             ) : (

@@ -5,7 +5,7 @@
 
 "use client"
 
-import { useState, useMemo, useCallback, useRef, useEffect } from "react"
+import { useState, useMemo, useCallback, useRef, useEffect, useDeferredValue } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import {
   Search,
@@ -44,7 +44,8 @@ interface FileSearchResult {
 
 interface SearchPanelProps {
   files: FileNode[]
-  onOpenFile: (path: string) => void
+  /** Open a file and reveal a specific line in the editor */
+  onNavigateTo: (path: string, line: number) => void
   onReplaceInFile?: (path: string, search: string | RegExp, replacement: string) => void
   className?: string
 }
@@ -77,39 +78,48 @@ function buildSearchRegex(
 
 // ─── Component ───────────────────────────────────────────────────────────
 
+// Max matches to display per file to avoid rendering thousands of DOM nodes
+const MAX_MATCHES_PER_FILE = 50
+
 export function SearchPanel({
   files,
-  onOpenFile,
+  onNavigateTo,
   onReplaceInFile,
   className,
 }: SearchPanelProps) {
+  // Immediate state — input value updates with no delay
   const [searchQuery, setSearchQuery] = useState("")
   const [replaceQuery, setReplaceQuery] = useState("")
   const [showReplace, setShowReplace] = useState(false)
   const [matchCase, setMatchCase] = useState(false)
   const [wholeWord, setWholeWord] = useState(false)
   const [useRegex, setUseRegex] = useState(false)
-  const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set())
+  // Files the user has explicitly collapsed — all result files are expanded by default
+  const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set())
   const searchInputRef = useRef<HTMLInputElement>(null)
+
+  // Deferred values — the expensive search computation runs against these,
+  // which React can deprioritize so the input never blocks.
+  const deferredQuery = useDeferredValue(searchQuery)
+  const deferredMatchCase = useDeferredValue(matchCase)
+  const deferredWholeWord = useDeferredValue(wholeWord)
+  const deferredUseRegex = useDeferredValue(useRegex)
+
+  // True when the deferred values haven't caught up yet — show a subtle stale indicator
+  const isStale = deferredQuery !== searchQuery
 
   // Focus search input on mount
   useEffect(() => {
     searchInputRef.current?.focus()
   }, [])
 
-  // Auto-expand all files when search changes
-  useEffect(() => {
-    if (searchQuery) {
-      setExpandedFiles(new Set(results.map((r) => r.path)))
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchQuery, matchCase, wholeWord, useRegex])
-
+  // Regex built from deferred values — does NOT block the input
   const regex = useMemo(
-    () => buildSearchRegex(searchQuery, matchCase, wholeWord, useRegex),
-    [searchQuery, matchCase, wholeWord, useRegex]
+    () => buildSearchRegex(deferredQuery, deferredMatchCase, deferredWholeWord, deferredUseRegex),
+    [deferredQuery, deferredMatchCase, deferredWholeWord, deferredUseRegex]
   )
 
+  // Only validate the live regex for the error message (cheap)
   const regexError = useMemo(() => {
     if (!useRegex || !searchQuery) return null
     try {
@@ -120,8 +130,9 @@ export function SearchPanel({
     }
   }, [useRegex, searchQuery])
 
+  // Expensive search — runs on deferred values so it never delays keystrokes
   const results: FileSearchResult[] = useMemo(() => {
-    if (!regex || !searchQuery.trim()) return []
+    if (!regex || !deferredQuery.trim()) return []
 
     const fileResults: FileSearchResult[] = []
 
@@ -130,8 +141,8 @@ export function SearchPanel({
       const matches: SearchMatch[] = []
 
       for (let i = 0; i < lines.length; i++) {
+        if (matches.length >= MAX_MATCHES_PER_FILE) break
         const line = lines[i]
-        // Reset lastIndex for global regex
         const lineRegex = new RegExp(regex.source, regex.flags)
         let match: RegExpExecArray | null
 
@@ -142,8 +153,8 @@ export function SearchPanel({
             length: match[0].length,
             lineText: line,
           })
-          // Prevent infinite loop on zero-length matches
           if (match[0].length === 0) lineRegex.lastIndex++
+          if (matches.length >= MAX_MATCHES_PER_FILE) break
         }
       }
 
@@ -153,7 +164,7 @@ export function SearchPanel({
     }
 
     return fileResults
-  }, [regex, searchQuery, files])
+  }, [regex, deferredQuery, files])
 
   const totalMatches = useMemo(
     () => results.reduce((sum, r) => sum + r.matches.length, 0),
@@ -161,12 +172,12 @@ export function SearchPanel({
   )
 
   const toggleFileExpanded = useCallback((path: string) => {
-    setExpandedFiles((prev) => {
+    setCollapsedFiles((prev) => {
       const next = new Set(prev)
       if (next.has(path)) {
-        next.delete(path)
+        next.delete(path) // un-collapse
       } else {
-        next.add(path)
+        next.add(path) // collapse
       }
       return next
     })
@@ -243,7 +254,11 @@ export function SearchPanel({
             <Input
               ref={searchInputRef}
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => {
+                setSearchQuery(e.target.value)
+                // Reset collapsed state whenever the user types a new query
+                setCollapsedFiles(new Set())
+              }}
               placeholder="Search"
               className="h-7 text-xs pr-20 font-mono bg-base"
             />
@@ -342,12 +357,12 @@ export function SearchPanel({
           )}
         </AnimatePresence>
 
-        {/* Results summary */}
+        {/* Results summary + stale indicator */}
         {searchQuery.trim() && (
           <p className="text-xs text-text-tertiary pl-7">
             {totalMatches === 0
-              ? "No results found"
-              : `${totalMatches} result${totalMatches !== 1 ? "s" : ""} in ${results.length} file${results.length !== 1 ? "s" : ""}`}
+              ? (isStale ? "Searching…" : "No results found")
+              : `${totalMatches} result${totalMatches !== 1 ? "s" : ""} in ${results.length} file${results.length !== 1 ? "s" : ""}${isStale ? "…" : ""}`}
           </p>
         )}
       </div>
@@ -357,7 +372,8 @@ export function SearchPanel({
         <div className="py-1">
           <AnimatePresence initial={false}>
             {results.map((fileResult) => {
-              const isExpanded = expandedFiles.has(fileResult.path)
+              // A result file is expanded by default; collapsed only if user explicitly toggled it
+              const isExpanded = !collapsedFiles.has(fileResult.path)
 
               return (
                 <motion.div
@@ -426,7 +442,7 @@ export function SearchPanel({
                         {fileResult.matches.map((match, idx) => (
                           <button
                             key={`${match.line}-${match.column}-${idx}`}
-                            onClick={() => onOpenFile(fileResult.path)}
+                            onClick={() => onNavigateTo(fileResult.path, match.line)}
                             className="flex items-start w-full pl-8 pr-2 py-0.5 hover:bg-hover text-left"
                           >
                             <span className="text-xs text-text-tertiary mr-2 shrink-0 tabular-nums w-8 text-right">
@@ -445,12 +461,12 @@ export function SearchPanel({
             })}
           </AnimatePresence>
 
-          {/* Empty state */}
-          {searchQuery.trim() && totalMatches === 0 && (
+          {/* Empty state: typed something but no results yet */}
+          {deferredQuery.trim() && totalMatches === 0 && !isStale && (
             <div className="flex flex-col items-center justify-center py-8 px-4 text-center">
               <Search className="h-8 w-8 text-text-tertiary mb-2 opacity-40" />
               <p className="text-xs text-text-tertiary">
-                No results found for &ldquo;{searchQuery}&rdquo;
+                No results for &ldquo;{deferredQuery}&rdquo;
               </p>
               {useRegex && regexError && (
                 <p className="text-xs text-error mt-1">Invalid regex pattern</p>

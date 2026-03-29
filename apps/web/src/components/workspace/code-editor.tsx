@@ -64,6 +64,8 @@ interface CodeEditorProps {
   recentUndos?: RecentAIUndo[]
   /** Callback to redo an undone AI operation */
   onQuickRedo?: (undo: RecentAIUndo) => void
+  /** When set, the editor scrolls to and focuses this 1-based line number */
+  revealLine?: number | null
 }
 
 // ─── Diff Utilities ──────────────────────────────────────────────────────
@@ -428,6 +430,7 @@ export function CodeEditor({
   onQuickUndo,
   recentUndos = [],
   onQuickRedo,
+  revealLine,
 }: CodeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [MonacoEditor, setMonacoEditor] = useState<typeof import("@monaco-editor/react").default | null>(null)
@@ -455,6 +458,17 @@ export function CodeEditor({
       undoManagerRef.current = null
     }
   }, [])
+
+  // ── Reveal a specific line when requested (e.g. from Search panel) ──
+  useEffect(() => {
+    if (!editorReady || !revealLine) return
+    const editor = editorRef.current
+    if (!editor) return
+    // Center the target line and place the cursor at column 1
+    editor.revealLineInCenter(revealLine)
+    editor.setPosition({ lineNumber: revealLine, column: 1 })
+    editor.focus()
+  }, [revealLine, editorReady])
 
   // ── React-based cursor overlay ──
   // Reads awareness selections, converts to pixel positions via Monaco API,
