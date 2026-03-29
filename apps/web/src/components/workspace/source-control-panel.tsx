@@ -21,6 +21,10 @@ import {
   GitCommit,
   RefreshCw,
   Loader2,
+  CloudUpload,
+  CloudDownload,
+  Download,
+  Link2,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -47,8 +51,14 @@ export function SourceControlPanel({
 }: SourceControlPanelProps) {
   const git = useGit()
   const [commitMessage, setCommitMessage] = useState("")
+  const [remoteUrl, setRemoteUrl] = useState("")
+  const [githubUsername, setGithubUsername] = useState("")
+  const [githubToken, setGithubToken] = useState("")
+  const [connectingRemote, setConnectingRemote] = useState(false)
   const [changesExpanded, setChangesExpanded] = useState(true)
   const [stagedExpanded, setStagedExpanded] = useState(true)
+
+  const remoteConnected = git.remotes.length > 0
 
   // Split files into staged and unstaged
   const { stagedFiles, unstagedFiles } = useMemo(() => {
@@ -83,6 +93,39 @@ export function SourceControlPanel({
     },
     [handleCommit]
   )
+
+  const normalizeRemoteUrl = useCallback((value: string): string => {
+    const trimmed = value.trim()
+    if (!trimmed) return ""
+    if (trimmed.startsWith("git@github.com:")) {
+      const repoPath = trimmed.slice("git@github.com:".length).replace(/\.git$/, "")
+      return `https://github.com/${repoPath}.git`
+    }
+    if (trimmed.startsWith("https://github.com/") || trimmed.startsWith("http://github.com/")) {
+      return trimmed.endsWith(".git") ? trimmed : `${trimmed}.git`
+    }
+    return trimmed
+  }, [])
+
+  const handleConnectRemote = useCallback(async () => {
+    const normalizedUrl = normalizeRemoteUrl(remoteUrl)
+    if (!normalizedUrl) return
+    setConnectingRemote(true)
+    try {
+      await git.addRemote("origin", normalizedUrl)
+      if (githubToken.trim()) {
+        git.setCredentials({
+          username: githubUsername.trim() || "oauth2",
+          password: githubToken.trim(),
+        })
+      }
+      setRemoteUrl("")
+      setGithubUsername("")
+      setGithubToken("")
+    } finally {
+      setConnectingRemote(false)
+    }
+  }, [git, githubToken, githubUsername, normalizeRemoteUrl, remoteUrl])
 
   // Get icon for file status
   const getStatusIcon = (status: FileStatus) => {
@@ -214,9 +257,80 @@ export function SourceControlPanel({
               <GitCommit className="h-3.5 w-3.5" />
               Commit ({stagedFiles.length})
             </Button>
+
+            <div className="mt-2 grid grid-cols-3 gap-1">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs gap-1"
+                disabled={!remoteConnected || git.syncing}
+                onClick={() => git.fetch()}
+              >
+                <Download className="h-3.5 w-3.5" />
+                Fetch
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs gap-1"
+                disabled={!remoteConnected || git.syncing}
+                onClick={() => git.pull()}
+              >
+                <CloudDownload className="h-3.5 w-3.5" />
+                Pull
+              </Button>
+              <Button
+                size="sm"
+                className="h-7 text-xs gap-1"
+                disabled={!remoteConnected || git.syncing}
+                onClick={() => git.push()}
+              >
+                <CloudUpload className="h-3.5 w-3.5" />
+                Push
+              </Button>
+            </div>
           </div>
 
           <Separator className="my-2" />
+
+          {!remoteConnected ? (
+            <>
+              <div className="mb-3 rounded-md border border-border-subtle p-2">
+                <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-text-secondary">
+                  <Link2 className="h-3.5 w-3.5" />
+                  Connect Remote
+                </div>
+                <Input
+                  placeholder="https://github.com/user/repo.git"
+                  value={remoteUrl}
+                  onChange={(e) => setRemoteUrl(e.target.value)}
+                  className="mb-1 h-8 text-xs"
+                />
+                <Input
+                  placeholder="GitHub username (optional)"
+                  value={githubUsername}
+                  onChange={(e) => setGithubUsername(e.target.value)}
+                  className="mb-1 h-8 text-xs"
+                />
+                <Input
+                  placeholder="GitHub token (optional for private repos)"
+                  type="password"
+                  value={githubToken}
+                  onChange={(e) => setGithubToken(e.target.value)}
+                  className="h-8 text-xs"
+                />
+                <Button
+                  size="sm"
+                  className="mt-2 h-7 w-full text-xs"
+                  disabled={!remoteUrl.trim() || connectingRemote}
+                  onClick={handleConnectRemote}
+                >
+                  {connectingRemote ? "Connecting..." : "Connect Repository"}
+                </Button>
+              </div>
+              <Separator className="my-2" />
+            </>
+          ) : null}
 
           {/* Staged Changes */}
           <div className="mb-2">

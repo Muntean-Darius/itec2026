@@ -77,8 +77,9 @@ export function createYjsFsAdapter(options: YjsFsAdapterOptions) {
   // Helper to get the files map from Yjs
   const getFilesMap = (): YMapLike => ydoc.getMap("files")
 
-  // Normalize path to a canonical absolute path.
+  // Normalize path to a canonical absolute path (for git operations).
   // Handles ".", "..", duplicate slashes, and trailing slash normalization.
+  // Returns path WITH leading "/" for git compatibility.
   const normalizePath = (filepath: string): string => {
     const raw = (filepath || "/").replace(/\\/g, "/")
     const withLeading = raw.startsWith("/") ? raw : "/" + raw
@@ -97,18 +98,26 @@ export function createYjsFsAdapter(options: YjsFsAdapterOptions) {
     return "/" + resolved.join("/")
   }
 
+  // Convert a normalized path to a Yjs key (WITHOUT leading slash).
+  // Yjs stores files with keys like "hello.py" not "/hello.py".
+  const toYjsKey = (normalizedPath: string): string => {
+    return normalizedPath.startsWith("/") ? normalizedPath.slice(1) : normalizedPath
+  }
+
   // Check if path is inside .git directory
   const isGitPath = (filepath: string): boolean => {
     const normalized = normalizePath(filepath)
     return normalized === "/.git" || normalized.startsWith("/.git/")
   }
 
-  // Get all workspace paths from Yjs
+  // Get all workspace paths from Yjs (with leading "/" for git compatibility)
   const getWorkspacePaths = (): string[] => {
     const filesMap = getFilesMap()
     const paths: string[] = []
     filesMap.forEach((_, key) => {
-      paths.push(normalizePath(key))
+      // Yjs keys don't have leading "/", but we need them for git
+      const withSlash = key.startsWith("/") ? key : "/" + key
+      paths.push(normalizePath(withSlash))
     })
     return paths
   }
@@ -137,9 +146,10 @@ export function createYjsFsAdapter(options: YjsFsAdapterOptions) {
       return result as Uint8Array | string
     }
 
-    // Read from Yjs
+    // Read from Yjs (keys are stored WITHOUT leading "/")
     const filesMap = getFilesMap()
-    const yText = filesMap.get(normalized) as YTextLike | undefined
+    const yjsKey = toYjsKey(normalized)
+    const yText = filesMap.get(yjsKey) as YTextLike | undefined
 
     if (!yText) {
       const error = new Error(`ENOENT: no such file or directory, open '${normalized}'`) as NodeJS.ErrnoException
@@ -167,12 +177,13 @@ export function createYjsFsAdapter(options: YjsFsAdapterOptions) {
       return
     }
 
-    // Write to Yjs
+    // Write to Yjs (keys are stored WITHOUT leading "/")
     const content = typeof data === "string" ? data : new TextDecoder().decode(data)
     const filesMap = getFilesMap()
+    const yjsKey = toYjsKey(normalized)
 
     ydoc.transact(() => {
-      const existing = filesMap.get(normalized) as YTextLike | undefined
+      const existing = filesMap.get(yjsKey) as YTextLike | undefined
       if (existing) {
         // Update existing Y.Text
         existing.delete(0, existing.toString().length)
@@ -180,7 +191,7 @@ export function createYjsFsAdapter(options: YjsFsAdapterOptions) {
       } else {
         // Create new Y.Text
         const yText = new Y.Text(content)
-        filesMap.set(normalized, yText)
+        filesMap.set(yjsKey, yText)
       }
     })
   }
@@ -194,15 +205,16 @@ export function createYjsFsAdapter(options: YjsFsAdapterOptions) {
       return
     }
 
-    // Delete from Yjs
+    // Delete from Yjs (keys are stored WITHOUT leading "/")
     const filesMap = getFilesMap()
-    if (!filesMap.has(normalized)) {
+    const yjsKey = toYjsKey(normalized)
+    if (!filesMap.has(yjsKey)) {
       const error = new Error(`ENOENT: no such file or directory, unlink '${normalized}'`) as NodeJS.ErrnoException
       error.code = "ENOENT"
       throw error
     }
     ydoc.transact(() => {
-      filesMap.delete(normalized)
+      filesMap.delete(yjsKey)
     })
   }
 
@@ -273,13 +285,13 @@ export function createYjsFsAdapter(options: YjsFsAdapterOptions) {
 
     // For Yjs workspace, removing a directory means removing all files with that prefix
     const filesMap = getFilesMap()
-    const prefix = normalized + "/"
+    const prefix = toYjsKey(normalized) + "/"
 
     ydoc.transact(() => {
       const keysToDelete: string[] = []
       filesMap.forEach((_, key) => {
-        const normalizedKey = normalizePath(key)
-        if (normalizedKey.startsWith(prefix)) {
+        // Keys in Yjs don't have leading "/"
+        if (key.startsWith(prefix) || key === toYjsKey(normalized)) {
           keysToDelete.push(key)
         }
       })
@@ -317,9 +329,10 @@ export function createYjsFsAdapter(options: YjsFsAdapterOptions) {
       return result as unknown as StatResult
     }
 
-    // Check if it's a file in Yjs
+    // Check if it's a file in Yjs (keys are stored WITHOUT leading "/")
     const filesMap = getFilesMap()
-    const yText = filesMap.get(normalized) as YTextLike | undefined
+    const yjsKey = toYjsKey(normalized)
+    const yText = filesMap.get(yjsKey) as YTextLike | undefined
 
     if (yText) {
       const content = yText.toString()
@@ -382,9 +395,11 @@ export function createYjsFsAdapter(options: YjsFsAdapterOptions) {
       throw new Error("Cannot rename between workspace and .git")
     }
 
-    // Rename in Yjs
+    // Rename in Yjs (keys are stored WITHOUT leading "/")
     const filesMap = getFilesMap()
-    const yText = filesMap.get(normalizedOld) as YTextLike | undefined
+    const oldYjsKey = toYjsKey(normalizedOld)
+    const newYjsKey = toYjsKey(normalizedNew)
+    const yText = filesMap.get(oldYjsKey) as YTextLike | undefined
 
     if (!yText) {
       const error = new Error(`ENOENT: no such file or directory, rename '${normalizedOld}'`) as NodeJS.ErrnoException
@@ -394,9 +409,9 @@ export function createYjsFsAdapter(options: YjsFsAdapterOptions) {
 
     const content = yText.toString()
     ydoc.transact(() => {
-      filesMap.delete(normalizedOld)
+      filesMap.delete(oldYjsKey)
       const newYText = new Y.Text(content)
-      filesMap.set(normalizedNew, newYText)
+      filesMap.set(newYjsKey, newYText)
     })
   }
 

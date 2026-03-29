@@ -57,6 +57,10 @@ interface WorkspaceShellProps {
   currentUser: User
   agents: AIAgent[]
   snapshots: Snapshot[]
+  initialGitCredentials?: {
+    username: string
+    password: string
+  }
 }
 
 // Size constraints
@@ -77,6 +81,7 @@ export function WorkspaceShell({
   currentUser,
   agents,
   snapshots,
+  initialGitCredentials,
 }: WorkspaceShellProps) {
   // Real-time collaboration
   const collab = useCollaboration({
@@ -575,6 +580,7 @@ export function WorkspaceShell({
         name: currentUser.name,
         email: currentUser.email,
       }}
+      initialCredentials={initialGitCredentials}
     >
     <div className="flex h-full flex-col bg-background">
       {/* ─── Top Bar ─── */}

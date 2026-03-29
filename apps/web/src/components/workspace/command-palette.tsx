@@ -291,12 +291,12 @@ export function CommandPalette({
                         <>
                           <CommandItem
                             onSelect={() => {
-                              git.push()
+                              git.fetch()
                               onOpenChange(false)
                             }}
                           >
-                            <CloudUpload className="mr-2 h-4 w-4 text-text-tertiary" />
-                            Push
+                            <CloudDownload className="mr-2 h-4 w-4 text-text-tertiary" />
+                            Fetch
                           </CommandItem>
                           <CommandItem
                             onSelect={() => {
@@ -306,6 +306,15 @@ export function CommandPalette({
                           >
                             <CloudDownload className="mr-2 h-4 w-4 text-text-tertiary" />
                             Pull
+                          </CommandItem>
+                          <CommandItem
+                            onSelect={() => {
+                              git.push()
+                              onOpenChange(false)
+                            }}
+                          >
+                            <CloudUpload className="mr-2 h-4 w-4 text-text-tertiary" />
+                            Push
                           </CommandItem>
                         </>
                       )}

@@ -139,25 +139,31 @@ export function createGitOperations(
     }))
   }
 
+  // Normalize filepath for isomorphic-git (expects paths without leading "/")
+  const normalizeFilepath = (filepath: string): string => {
+    return filepath.startsWith("/") ? filepath.slice(1) : filepath
+  }
+
   const add = async (filepath: string): Promise<void> => {
-    await git.add({ ...commonOpts, filepath })
+    await git.add({ ...commonOpts, filepath: normalizeFilepath(filepath) })
   }
 
   const remove = async (filepath: string): Promise<void> => {
-    await git.remove({ ...commonOpts, filepath })
+    await git.remove({ ...commonOpts, filepath: normalizeFilepath(filepath) })
   }
 
   const discardChanges = async (filepath: string): Promise<void> => {
+    const normalizedPath = normalizeFilepath(filepath)
     try {
       // Reset file to HEAD when a commit exists
       await git.resolveRef({ ...commonOpts, ref: "HEAD" })
-      await git.checkout({ ...commonOpts, ref: "HEAD", filepaths: [filepath], force: true })
+      await git.checkout({ ...commonOpts, ref: "HEAD", filepaths: [normalizedPath], force: true })
       return
     } catch {
       // Fresh repo with no commits yet: "discard" means remove the working file
       // if it exists (equivalent to undo untracked file creation).
       try {
-        await fs.promises.unlink(filepath)
+        await fs.promises.unlink("/" + normalizedPath)
       } catch {
         // If file doesn't exist, nothing to discard.
       }
@@ -336,11 +342,29 @@ export function getFileStatusLabel(status: FileStatus): string {
 }
 
 export function isFileStaged(status: FileStatus): boolean {
-  return status.stage !== 1 && status.stage !== 0
+  // File is staged if stage is different from HEAD (stage !== 1 for existing files)
+  // or if it's a new file in the stage (stage === 2 or 3)
+  return status.stage === 2 || status.stage === 3
 }
 
 export function hasUnstagedChanges(status: FileStatus): boolean {
-  return (status.workdir === 2 || status.workdir === 0) && !isFileStaged(status)
+  // File has unstaged changes if workdir differs from stage
+  // For untracked files: head=0, workdir=2, stage=0
+  // For modified but not staged: head=1, workdir=2, stage=1
+  // For deleted but not staged: head=1, workdir=0, stage=1
+  if (status.head === 0 && status.workdir === 2 && status.stage === 0) {
+    // Untracked file
+    return true
+  }
+  if (status.head === 1 && status.workdir === 2 && status.stage === 1) {
+    // Modified but not staged
+    return true
+  }
+  if (status.head === 1 && status.workdir === 0 && status.stage === 1) {
+    // Deleted but not staged
+    return true
+  }
+  return false
 }
 
 export function hasChanges(status: FileStatus): boolean {

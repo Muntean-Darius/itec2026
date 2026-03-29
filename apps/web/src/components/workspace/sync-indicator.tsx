@@ -13,6 +13,7 @@ import {
   CloudDownload,
   RefreshCw,
   Loader2,
+  Download,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -42,6 +43,11 @@ export function SyncIndicator({ className }: SyncIndicatorProps) {
 
   const handlePull = useCallback(async () => {
     await git.pull()
+    setOpen(false)
+  }, [git])
+
+  const handleFetch = useCallback(async () => {
+    await git.fetch()
     setOpen(false)
   }, [git])
 
@@ -103,6 +109,14 @@ export function SyncIndicator({ className }: SyncIndicatorProps) {
           Sync with Remote
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+
+        <DropdownMenuItem
+          className="text-xs cursor-pointer"
+          onClick={handleFetch}
+        >
+          <Download className="h-3.5 w-3.5 mr-2 text-text-tertiary" />
+          Fetch
+        </DropdownMenuItem>
 
         <DropdownMenuItem
           className="text-xs cursor-pointer"

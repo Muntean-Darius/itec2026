@@ -71,6 +71,7 @@ export interface GitContextValue extends GitState {
   checkoutBranch: (name: string) => Promise<void>
   push: () => Promise<void>
   pull: () => Promise<void>
+  fetch: () => Promise<void>
   addRemote: (name: string, url: string) => Promise<void>
   getDiff: (filepath: string) => Promise<{ original: string; current: string } | null>
   setCredentials: (creds: GitCredentials) => void
@@ -192,9 +193,39 @@ export function GitProvider({
       }
     })()
 
+    // Observe Yjs files map for changes and refresh git status
+    const filesMap = typedYdoc.getMap("files")
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null
+    
+    const onFilesChange = () => {
+      // Debounce the refresh to avoid excessive calls during rapid edits
+      if (debounceTimer) clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(async () => {
+        if (gitRef.current) {
+          try {
+            const initialized = await gitRef.current.isInitialized()
+            if (initialized) {
+              await refreshStatusInternal()
+            }
+          } catch {
+            // Ignore errors during background refresh
+          }
+        }
+      }, 500) // 500ms debounce
+    }
+
+    // Type assertion for Y.Map observer
+    const mapObserver = filesMap as unknown as { 
+      observe: (fn: () => void) => void
+      unobserve: (fn: () => void) => void 
+    }
+    mapObserver.observe(onFilesChange)
+
     return () => {
       fsRef.current = null
       gitRef.current = null
+      if (debounceTimer) clearTimeout(debounceTimer)
+      mapObserver.unobserve(onFilesChange)
     }
   }, [projectId, ydoc, Y, refreshStatusInternal])
 
@@ -415,6 +446,26 @@ export function GitProvider({
     }
   }, [credentials, refreshStatusInternal])
 
+  const fetch = useCallback(async () => {
+    const git = gitRef.current
+    if (!git || !credentials) {
+      toast.error("GitHub credentials required for fetch")
+      return
+    }
+
+    setState((s) => ({ ...s, syncing: true }))
+    try {
+      await git.fetch(credentials)
+      toast.success("Fetched from remote")
+      await refreshStatusInternal()
+    } catch (error) {
+      console.error("Git fetch failed:", error)
+      toast.error("Failed to fetch")
+    } finally {
+      setState((s) => ({ ...s, syncing: false }))
+    }
+  }, [credentials, refreshStatusInternal])
+
   const addRemote = useCallback(
     async (name: string, url: string) => {
       const git = gitRef.current
@@ -466,6 +517,7 @@ export function GitProvider({
     checkoutBranch,
     push,
     pull,
+    fetch,
     addRemote,
     getDiff,
     setCredentials: setCredentialsHandler,
