@@ -273,7 +273,7 @@ const RUN_COMMAND_SCHEMA = {
     },
     installCommand: {
       type: Type.STRING,
-      description: "If the project has dependencies that need to be installed first, provide the install command (e.g. 'npm install', 'pip install -r requirements.txt'). Leave empty if not needed or if node_modules/venv already exists.",
+      description: "Only for projects that need a separate dependency install step (e.g. 'npm install', 'pip install -r requirements.txt'). Leave empty for Rust (cargo run handles building), Go (go run handles building), C/C++ (make handles building), and any project where the run command already compiles. NEVER use 'cargo install'.",
     },
     explanation: {
       type: Type.STRING,
@@ -350,15 +350,16 @@ RULES:
 - For Node.js projects: prefer "dev" or "start" scripts from package.json. Check if it's a Next.js, Vite, Express, etc. project.
 - For Python projects: check for Django (manage.py runserver), Flask (python app.py / flask run), FastAPI (uvicorn), or plain scripts.
 - For Go: use "go run ." or "go run main.go".
-- For Rust: use "cargo run".
+- For Rust: use "cargo run". For Rust workspaces, use "cargo run --package <name>" or "cargo run --bin <name>". NEVER use "cargo install" — it tries to install binaries globally and will fail with permission errors. "cargo run" already compiles and runs in one step, so no separate install/build command is needed. Leave installCommand empty for Rust projects.
 - For Java: use "javac" + "java" or build tool commands.
-- For C/C++: use "make" or compile commands.
+- For C/C++: use "make" or compile commands. Leave installCommand empty — compilation is part of the run step.
+- For Go: "go run" already compiles and runs. Leave installCommand empty.
 - Detect the package manager: use npm if package-lock.json exists, yarn if yarn.lock exists, pnpm if pnpm-lock.yaml exists.
 - If there's a Makefile with a "run" or "dev" target, prefer that.
 - If the README specifies how to run the project, follow those instructions.
 - If .vscode/launch.json or .vscode/tasks.json exists, consider those configurations.
-- Always provide the install command if dependencies haven't been installed yet (no node_modules, no venv, etc.).
-- The command will run inside a Docker container with Ubuntu 22.04 that has Node.js 20, Python 3, Java 17, Go, Rust, and C/C++ build tools pre-installed.
+- Only provide installCommand when the project genuinely needs a separate dependency installation step (e.g. "npm install", "pip install -r requirements.txt"). Do NOT provide installCommand for languages where the build/run tool handles everything (Rust/cargo, Go, C/C++/make).
+- The command will run inside a Docker container with Ubuntu 22.04 that has Node.js 20, Python 3, Java 17, Go, Rust, and C/C++ build tools pre-installed. All tools are on PATH.
 - For web dev servers, prefer commands that bind to 0.0.0.0 so the port is accessible.
 ${previousContext}`
 
