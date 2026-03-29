@@ -122,6 +122,8 @@ export interface UseCollaborationReturn {
   broadcastSnapshot: (snapshot: Record<string, unknown>) => void
   /** Subscribe to snapshot-created events from other clients — returns unsubscribe function */
   onSnapshotCreated: (handler: (data: { snapshot: Record<string, unknown> }) => void) => () => void
+  /** Request the server to save a Yjs snapshot to DB immediately */
+  requestSnapshotSave: () => void
 }
 
 // ─── Hook ────────────────────────────────────────────────────────────────
@@ -1022,6 +1024,12 @@ export function useCollaboration({
     []
   )
 
+  const requestSnapshotSave = useCallback(() => {
+    const socket = socketRef.current
+    if (!socket) return
+    socket.emit("request-snapshot-save")
+  }, [])
+
   return {
     connected,
     dockerStatus,
@@ -1067,5 +1075,6 @@ export function useCollaboration({
     onAIMergeResult,
     broadcastSnapshot,
     onSnapshotCreated,
+    requestSnapshotSave,
   }
 }

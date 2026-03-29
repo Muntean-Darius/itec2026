@@ -1107,14 +1107,25 @@ export function WorkspaceShell({
                     const restoredPaths = new Set(restoredEntries.map(([path]) => path))
                     const livePaths = new Set(liveFiles.map((f) => f.path))
 
-                    for (const livePath of livePaths) {
-                      if (!restoredPaths.has(livePath)) {
-                        collab.deleteFile(livePath)
+                    // Batch all Yjs mutations in a single doc transaction so the
+                    // entire restore is one atomic Yjs update for other clients.
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const ydoc = collab.getYdoc() as any
+                    const txnBody = () => {
+                      for (const livePath of livePaths) {
+                        if (!restoredPaths.has(livePath)) {
+                          collab.deleteFile(livePath)
+                        }
+                      }
+
+                      for (const [path, content] of restoredEntries) {
+                        collab.updateFileContent(path, content)
                       }
                     }
-
-                    for (const [path, content] of restoredEntries) {
-                      collab.updateFileContent(path, content)
+                    if (ydoc?.transact) {
+                      ydoc.transact(txnBody)
+                    } else {
+                      txnBody()
                     }
 
                     const firstPath = restoredEntries[0]?.[0]
@@ -1123,6 +1134,10 @@ export function WorkspaceShell({
                       setOpenFiles([firstPath])
                     }
                   }
+
+                  // Ask the server to persist a Yjs snapshot immediately so the
+                  // DB is up-to-date if any client refreshes before the 60 s cron.
+                  collab.requestSnapshotSave()
 
                   setTimeTravelActive(false)
                   setTimeTravelSnapshot(null)

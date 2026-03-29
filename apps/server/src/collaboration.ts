@@ -1243,6 +1243,14 @@ export function setupCollaboration(io: SocketIOServer) {
     })
 
     // ── Snapshot broadcast (time-travel sync across clients) ──────────
+
+    // Allow clients to request an immediate Yjs snapshot save (e.g. after
+    // a time-travel restore) so the DB is up-to-date before any refresh.
+    socket.on("request-snapshot-save", () => {
+      if (!currentRoom || !currentProjectId) return
+      saveSnapshot(currentProjectId, currentRoom)
+    })
+
     socket.on("snapshot-created", (msg: {
       snapshot: {
         id: string

@@ -439,6 +439,7 @@ export function CodeEditor({
   const undoManagerRef = useRef<any>(null)
   const editorRef = useRef<any>(null)
   const yjsModuleRef = useRef<any>(null)
+  const divergenceGuardRef = useRef<(() => void) | null>(null)
   /* eslint-enable @typescript-eslint/no-explicit-any */
   const [remoteCursors, setRemoteCursors] = useState<RemoteCursor[]>([])
   const [editorReady, setEditorReady] = useState(false)
@@ -452,6 +453,8 @@ export function CodeEditor({
   // Cleanup binding on unmount
   useEffect(() => {
     return () => {
+      divergenceGuardRef.current?.()
+      divergenceGuardRef.current = null
       bindingRef.current?.destroy()
       bindingRef.current = null
       undoManagerRef.current?.destroy()
@@ -614,6 +617,60 @@ export function CodeEditor({
             new Set([editor])
           )
 
+          // ── Divergence guard ─────────────────────────────────────
+          // y-monaco's _ytextObserver uses a mutex to prevent feedback
+          // loops.  If a local edit (_monacoChangeHandler) holds the
+          // mutex when a remote Y.Text change fires, the remote change
+          // is silently DROPPED — never applied to the Monaco model.
+          // Over time the model drifts from Y.Text, causing wrong
+          // cursor-relative-position mapping (cursor "teleports" to
+          // the remote user's position).
+          //
+          // Fix: after each Y.Text change, schedule a micro-check.
+          // If the model content doesn't match Y.Text, compute a
+          // minimal edit and apply it INSIDE the binding's mutex so
+          // _monacoChangeHandler can't push it back to Y.Text.
+          const yt = yText as any
+          const patchIfDiverged = () => {
+            const model = editor.getModel()
+            const binding = bindingRef.current as any
+            if (!model || !binding?.mux) return
+            const expected: string = yt.toString()
+            const actual: string = model.getValue()
+            if (expected === actual) return
+
+            // Compute minimal diff boundaries
+            const minLen = Math.min(expected.length, actual.length)
+            let pre = 0
+            while (pre < minLen && expected[pre] === actual[pre]) pre++
+            let suf = 0
+            while (
+              suf + pre < expected.length &&
+              suf + pre < actual.length &&
+              expected[expected.length - 1 - suf] === actual[actual.length - 1 - suf]
+            ) suf++
+
+            const startPos = model.getPositionAt(pre)
+            const endPos = model.getPositionAt(actual.length - suf)
+            const text = expected.substring(pre, expected.length - suf)
+
+            binding.mux(() => {
+              model.applyEdits([{
+                range: {
+                  startLineNumber: startPos.lineNumber,
+                  startColumn: startPos.column,
+                  endLineNumber: endPos.lineNumber,
+                  endColumn: endPos.column,
+                },
+                text,
+              }])
+            })
+          }
+          const onYTextChange = () => { requestAnimationFrame(patchIfDiverged) }
+          yt.observe(onYTextChange)
+          // Store cleanup so the unmount effect can unsubscribe
+          divergenceGuardRef.current = () => { yt.unobserve(onYTextChange) }
+
           // Create an UndoManager scoped to this Y.Text so undo only
           // reverts the current user's changes, not remote CRDT ops.
           const undoManager = new Y.UndoManager(yText as any, {
@@ -677,6 +734,9 @@ export function CodeEditor({
 
   // When using y-monaco binding, don't use value/onChange (the binding handles sync).
   // Only use controlled mode as a fallback when no Y.Text is available.
+  // In bound mode we pass defaultValue so the editor shows file content immediately
+  // while the async MonacoBinding initialises (prevents a flash of empty content,
+  // e.g. after a snapshot restore exits time-travel mode).
   const useBinding = !!yText && !!awareness
 
   return (
@@ -684,7 +744,7 @@ export function CodeEditor({
       <MonacoEditor
         height="100%"
         language={file.language === "typescript" ? "typescript" : file.language}
-        {...(useBinding ? {} : { value: file.content })}
+        {...(useBinding ? { defaultValue: file.content } : { value: file.content })}
         theme="itecify-dark"
         options={{
           readOnly,
