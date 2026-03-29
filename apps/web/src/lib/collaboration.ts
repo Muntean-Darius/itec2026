@@ -551,7 +551,12 @@ export function useCollaboration({
         const upd = awarenessProtocol.encodeAwarenessUpdate(awareness, [doc.clientID])
         socket.emit("awareness-update", { data: Array.from(upd) })
       }
+      const onAwarenessUpdate = () => {
+        // Keep presence reactive for remote cursor-only movements.
+        syncPresence()
+      }
       awareness.on("change", onAwarenessChange)
+      awareness.on("update", onAwarenessUpdate)
 
       // ── Observe shared types ──
       const onFilesChange = () => syncFilesFromDoc()
@@ -595,6 +600,7 @@ export function useCollaboration({
       cleanupFn = () => {
         doc.off("update", onDocUpdate)
         awareness.off("change", onAwarenessChange)
+        awareness.off("update", onAwarenessUpdate)
         filesMap.unobserveDeep(onFilesChange)
         metaMap.unobserveDeep(onMetaChange)
         terminalsMap.unobserveDeep(onTerminalsChange)
