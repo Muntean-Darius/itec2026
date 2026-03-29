@@ -860,7 +860,7 @@ export function WorkspaceShell({
             {activeFile ? (
               <>
                 <CodeEditor
-                  key={`${activeFilePath}:${timeTravelActive ? "tt" : "live"}`}
+                  key={`${activeFilePath}:${timeTravelActive ? "tt" : "live"}:${collab.getYText(activeFilePath) ? "bound" : "static"}`}
                   file={activeFile}
                   readOnly={timeTravelActive}
                   yText={timeTravelActive ? undefined : collab.getYText(activeFilePath)}

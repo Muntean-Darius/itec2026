@@ -349,20 +349,17 @@ export function useCollaboration({
       const aiChatsMap = doc.getMap("aiChats")
       const agentsMap = doc.getMap("agents")
 
-      // Seed initial files
-      if (initialFiles.length > 0) {
-        doc.transact(() => {
-          for (const file of initialFiles) {
-            // Normalize: strip leading slash to match createFile convention
-            const normalizedPath = file.path.startsWith("/") ? file.path.slice(1) : file.path
-            if (!filesMap.has(normalizedPath) && !filesMap.has("/" + normalizedPath)) {
-              const ytext = new Y.Text()
-              ytext.insert(0, file.content)
-              filesMap.set(normalizedPath, ytext)
-            }
-          }
-        })
-      }
+      // NOTE: We intentionally do NOT seed initialFiles into the Yjs doc here.
+      // The server loads files from the latest snapshot and provides them during
+      // the initial Yjs sync (sync-step-1/2 exchange).  If the client also seeds
+      // files, both sides create separate Y.Text items for the same map keys.
+      // Y.Map LWW conflict resolution picks one winner per key, but the Monaco
+      // binding (created at editor mount time) may be attached to the loser,
+      // causing one-way collaboration where one user's edits are invisible.
+      //
+      // The file tree still renders immediately from the `initialFiles` prop via
+      // React state (`useState<FileNode[]>(initialFiles)`), so the UI is not
+      // empty while waiting for the sync to deliver the live Y.Text instances.
 
       // ── Socket.IO ──
       const socket = io(COLLAB_SERVER_URL, {

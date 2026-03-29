@@ -154,27 +154,38 @@ async function ensureSnapshotLoaded(projectId: string, room: ProjectRoom) {
 
     const { blob, fileStates } = result
 
-    // Try applying the blob as a Yjs state update
-    if (blob.byteLength > 0) {
+    // Detect whether the blob is a real Yjs binary update or a client-created
+    // JSON blob (Buffer.from(JSON.stringify(fileStates))).  A Yjs update starts
+    // with a struct-count varint; a JSON blob starts with '{' (0x7B) or '['.
+    // Applying a JSON blob to Y.applyUpdate may silently corrupt the doc without
+    // throwing, so we must detect and skip it.
+    const isLikelyJsonBlob = blob.byteLength > 0 && (blob[0] === 0x7B || blob[0] === 0x5B) // '{' or '['
+
+    // Try applying the blob as a Yjs state update (only if it looks like a real Yjs binary)
+    if (blob.byteLength > 0 && !isLikelyJsonBlob) {
       try {
         Y.applyUpdate(room.doc, blob)
-        console.log(`[iTECify] Loaded snapshot for ${projectId} (${blob.byteLength} bytes)`)
+        console.log(`[iTECify] Loaded Yjs snapshot for ${projectId} (${blob.byteLength} bytes)`)
         return
       } catch (err) {
         console.warn(`[iTECify] Yjs blob invalid for ${projectId}, falling back to fileStates:`, (err as Error).message)
       }
+    } else if (isLikelyJsonBlob) {
+      console.log(`[iTECify] Snapshot blob for ${projectId} is JSON (client-created), using fileStates instead`)
     }
 
-    // Fallback: reconstruct the doc from fileStates (handles client-created snapshots
+    // Reconstruct the doc from fileStates (handles client-created snapshots
     // where the blob is JSON text instead of a Yjs binary update)
     if (fileStates && typeof fileStates === "object") {
       const filesMap = room.doc.getMap("files")
       room.doc.transact(() => {
         for (const [path, content] of Object.entries(fileStates)) {
           if (typeof content === "string") {
+            // Normalize path: strip leading slash to match client convention
+            const normalizedPath = path.startsWith("/") ? path.slice(1) : path
             const ytext = new Y.Text()
             ytext.insert(0, content)
-            filesMap.set(path, ytext)
+            filesMap.set(normalizedPath, ytext)
           }
         }
       }, "server")
