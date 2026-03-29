@@ -63,6 +63,7 @@ export interface UseCollaborationReturn {
   aiAgents: AIAgent[]
   getYText: (path: string) => unknown | null
   getYdoc: () => unknown | null
+  getYjs: () => unknown | null
   getAwareness: () => unknown | null
   getTerminalInputYText: (sessionId: string) => unknown | null
   getAIChatInputYText: (chatId: string) => unknown | null
@@ -604,6 +605,8 @@ export function useCollaboration({
 
   const getYdoc = useCallback(() => ydocRef.current, [])
 
+  const getYjs = useCallback(() => yjsRef.current, [])
+
   const getAwareness = useCallback(() => awarenessRef.current, [])
 
   const getYText = useCallback((path: string): unknown | null => {
@@ -1012,6 +1015,7 @@ export function useCollaboration({
     aiChatSessions,
     aiAgents,
     getYdoc,
+    getYjs,
     getYText,
     getAwareness,
     createFile,
