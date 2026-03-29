@@ -269,7 +269,7 @@ const RUN_COMMAND_SCHEMA = {
   properties: {
     command: {
       type: Type.STRING,
-      description: "The exact shell command to run the project (e.g. 'npm run dev', 'python main.py', 'go run .', 'cargo run'). Use the most appropriate command based on the project.",
+      description: "The exact shell command to run the project. For compiled languages, chain compile and execute with && (e.g. 'g++ -o app main.cpp && ./app', 'javac Main.java && java Main'). For interpreted languages, just the run command (e.g. 'npm run dev', 'python main.py'). Follow README instructions exactly when available.",
     },
     installCommand: {
       type: Type.STRING,
@@ -322,19 +322,34 @@ export async function detectRunCommand(opts: {
   contextParts.push(fileList.join("\n"))
   contextParts.push("")
 
+  const readmeFiles: string[] = []
+
   for (const [path, content] of files) {
     const normalizedPath = path.startsWith("/") ? path.slice(1) : path
     const basename = normalizedPath.split("/").pop() ?? ""
+    const isReadme = /^readme(\.(md|rst|txt))?$/i.test(basename)
     if (relevantPatterns.some(p => normalizedPath === p || normalizedPath.endsWith("/" + p) || basename === p)) {
       // Truncate large files (like lock files) to just the first part
       const maxChars = basename.includes("lock") ? 500 : 5000
       const truncated = content.length > maxChars ? content.slice(0, maxChars) + "\n... (truncated)" : content
-      relevantFiles.push(`--- ${normalizedPath} ---\n${truncated}`)
+      const entry = `--- ${normalizedPath} ---\n${truncated}`
+      if (isReadme) {
+        readmeFiles.push(entry)
+      } else {
+        relevantFiles.push(entry)
+      }
     }
   }
 
+  // Present README first — it has highest priority
+  if (readmeFiles.length > 0) {
+    contextParts.push("⚠️ README FILES (HIGHEST PRIORITY — follow these instructions exactly):")
+    contextParts.push(readmeFiles.join("\n\n"))
+    contextParts.push("")
+  }
+
   if (relevantFiles.length > 0) {
-    contextParts.push("RELEVANT FILE CONTENTS:")
+    contextParts.push("OTHER RELEVANT FILE CONTENTS:")
     contextParts.push(relevantFiles.join("\n\n"))
   }
 
@@ -346,17 +361,20 @@ export async function detectRunCommand(opts: {
 Your job is to analyze a project's file structure and configuration files, then determine the best command to start/run the project.
 
 RULES:
+- **README instructions take absolute priority.** If a README file (README.md, README.txt, etc.) contains any instructions about how to build or run the project, follow them exactly — ignore all other heuristics (Makefile presence, file extensions, lock files, etc.) unless the README is silent on the matter.
+- Only fall back to heuristics below when the README does NOT mention how to run the project.
 - Choose the most appropriate run command based on the project type and structure.
 - For Node.js projects: prefer "dev" or "start" scripts from package.json. Check if it's a Next.js, Vite, Express, etc. project.
 - For Python projects: check for Django (manage.py runserver), Flask (python app.py / flask run), FastAPI (uvicorn), or plain scripts.
-- For Go: use "go run ." or "go run main.go".
-- For Rust: use "cargo run". For Rust workspaces, use "cargo run --package <name>" or "cargo run --bin <name>". NEVER use "cargo install" — it tries to install binaries globally and will fail with permission errors. "cargo run" already compiles and runs in one step, so no separate install/build command is needed. Leave installCommand empty for Rust projects.
-- For Java: use "javac" + "java" or build tool commands.
-- For C/C++: use "make" or compile commands. Leave installCommand empty — compilation is part of the run step.
-- For Go: "go run" already compiles and runs. Leave installCommand empty.
+- For Go: use "go run ." or "go run main.go". ("go run" compiles and runs in one step — leave installCommand empty.)
+- For Rust: use "cargo run". For Rust workspaces, use "cargo run --package <name>" or "cargo run --bin <name>". NEVER use "cargo install" — it tries to install binaries globally and will fail with permission errors. "cargo run" compiles and runs in one step — leave installCommand empty.
+- For Java (no build system): compile first, then run — chain with &&. Example: "javac Main.java && java Main". If there are multiple .java files, compile all of them: "javac *.java && java Main". If Maven (pom.xml) is present, use "mvn compile exec:java -Dexec.mainClass=Main" or "mvn package && java -jar target/app.jar". If Gradle (build.gradle) is present, use "gradle run" or "./gradlew run".
+- For C (no build system): compile then run — "gcc -o app main.c && ./app" (or list all .c files if multiple). If a Makefile exists, use "make" and then run the resulting binary (e.g. "make && ./app").
+- For C++ (no build system): compile then run — "g++ -o app main.cpp && ./app" (or list all .cpp files if multiple). If a Makefile exists, use "make" and then run the resulting binary (e.g. "make && ./app").
+- For C/C++ with CMake (CMakeLists.txt): "cmake -B build && cmake --build build && ./build/app" (adjust binary name as appropriate).
+- Leave installCommand empty for compiled languages (Rust, Go, C, C++, Java without Maven/Gradle) — the compile step is part of the command itself.
 - Detect the package manager: use npm if package-lock.json exists, yarn if yarn.lock exists, pnpm if pnpm-lock.yaml exists.
-- If there's a Makefile with a "run" or "dev" target, prefer that.
-- If the README specifies how to run the project, follow those instructions.
+- If there's a Makefile with a "run" or "dev" target, prefer that (unless README overrides this).
 - If .vscode/launch.json or .vscode/tasks.json exists, consider those configurations.
 - Only provide installCommand when the project genuinely needs a separate dependency installation step (e.g. "npm install", "pip install -r requirements.txt"). Do NOT provide installCommand for languages where the build/run tool handles everything (Rust/cargo, Go, C/C++/make).
 - The command will run inside a Docker container with Ubuntu 22.04 that has Node.js 20, Python 3, Java 17, Go, Rust, and C/C++ build tools pre-installed. All tools are on PATH.
@@ -423,10 +441,24 @@ function fallbackDetectRunCommand(files: Map<string, string>, fileList: string[]
   if (hasFile("Cargo.toml")) return { command: "cargo run", explanation: "Detected Rust/Cargo project." }
 
   // C/C++ with Makefile
-  if (hasFile("Makefile")) return { command: "make && ./a.out", explanation: "Detected Makefile." }
+  if (hasFile("Makefile")) return { command: "make && ./app", explanation: "Detected Makefile — running make then ./app." }
 
-  // Java
-  if (hasFile("Main.java")) return { command: "javac Main.java && java Main", explanation: "Detected Java Main class." }
+  // C++ without Makefile
+  const cppFiles = fileList.filter(f => f.endsWith(".cpp"))
+  if (cppFiles.length > 0) {
+    const src = cppFiles.map(f => f.startsWith("/") ? f.slice(1) : f).join(" ")
+    return { command: `g++ -o app ${src} && ./app`, explanation: "Detected C++ source files — compiling with g++ then running." }
+  }
+
+  // C without Makefile
+  const cFiles = fileList.filter(f => f.endsWith(".c"))
+  if (cFiles.length > 0) {
+    const src = cFiles.map(f => f.startsWith("/") ? f.slice(1) : f).join(" ")
+    return { command: `gcc -o app ${src} && ./app`, explanation: "Detected C source files — compiling with gcc then running." }
+  }
+
+  // Java — compile then run
+  if (hasFile("Main.java")) return { command: "javac *.java && java Main", explanation: "Detected Java Main class — compiling then running." }
 
   return { command: "echo 'Could not detect how to run this project. Please run manually.'", explanation: "No recognizable project structure found." }
 }

@@ -31,14 +31,17 @@ import {
   executeStreamingCommand,
   killRunningProcess,
   isProcessRunning,
+  writeToProcess,
   getSessionCwd,
   onContainerStatus,
   onContainerStats,
+  onContainerLog,
   getContainerStats,
   startFileSync,
   stopFileSync,
   syncBeforeCommand,
   syncAfterCommand,
+  touchContainerActivity,
   type ContainerStatus,
 } from "./docker-manager.js"
 
@@ -245,7 +248,8 @@ async function saveSnapshot(projectId: string, room: ProjectRoom) {
     const fileStates: Record<string, string> = {}
     filesMap.forEach((value: unknown, key: string) => {
       if (value && typeof (value as { toString(): string }).toString === "function") {
-        fileStates[key] = (value as { toString(): string }).toString()
+        // Strip null bytes — PostgreSQL text columns reject \u0000
+        fileStates[key] = (value as { toString(): string }).toString().replace(/\x00/g, "")
       }
     })
 
@@ -275,6 +279,11 @@ export function setupCollaboration(io: SocketIOServer) {
     io.to(`project:${projectId}`).emit("docker-status", info)
   })
 
+  // Broadcast Docker container creation log messages to all clients in the relevant room
+  onContainerLog((projectId, message) => {
+    io.to(`project:${projectId}`).emit("docker-log", { message })
+  })
+
   // Broadcast Docker container stats to all clients in the relevant room
   onContainerStats((projectId, stats) => {
     io.to(`project:${projectId}`).emit("docker-stats", stats)
@@ -283,6 +292,95 @@ export function setupCollaboration(io: SocketIOServer) {
   io.on("connection", (socket: Socket) => {
     let currentProjectId: string | null = null
     let currentRoom: ProjectRoom | null = null
+
+    /**
+     * Lazily ensure a Docker container exists for the current project.
+     * Called when the user first runs a command or starts the runner.
+     * No-op if the container already exists.
+     */
+    async function ensureContainerForProject(): Promise<void> {
+      if (!currentRoom || !currentProjectId) return
+      const projectId = currentProjectId
+      const room = currentRoom
+      const roomName = `project:${projectId}`
+
+      // Already exists and is live — nothing to do
+      const existing = getContainerStatusInfo(projectId)
+      if (existing && existing.status === "ready") return
+      // If another call already started creating, wait for it to finish
+      if (existing && existing.status === "creating") {
+        await new Promise<void>((resolve) => {
+          const unsubscribe = onContainerStatus((id, info) => {
+            if (id === projectId && info.status !== "creating") {
+              unsubscribe()
+              resolve()
+            }
+          })
+        })
+        return
+      }
+
+      // Tell all clients the container is being created
+      io.to(roomName).emit("docker-status", { status: "creating" })
+
+      const filesMap = room.doc.getMap("files")
+      const fileEntries = new Map<string, string>()
+      filesMap.forEach((value: unknown, key: string) => {
+        if (value && typeof (value as { toString(): string }).toString === "function") {
+          fileEntries.set(key, (value as { toString(): string }).toString())
+        }
+      })
+
+      await ensureContainer(projectId, fileEntries)
+
+      // Start bidirectional file sync once container is ready
+      startFileSync(projectId, {
+        getFiles: () => {
+          const files = new Map<string, string>()
+          const fMap = room.doc.getMap("files")
+          fMap.forEach((value: unknown, key: string) => {
+            if (value && typeof (value as { toString(): string }).toString === "function") {
+              const normalizedKey = key.startsWith("/") ? key.slice(1) : key
+              files.set(normalizedKey, (value as { toString(): string }).toString())
+            }
+          })
+          return files
+        },
+        applyContainerChanges: (containerFiles: Map<string, string>) => {
+          const fMap = room.doc.getMap("files")
+          room.doc.transact(() => {
+            for (const [filePath, content] of containerFiles) {
+              let existing = fMap.get(filePath)
+              let actualKey = filePath
+              if (!(existing instanceof Y.Text)) {
+                existing = fMap.get("/" + filePath) as unknown
+                if (existing instanceof Y.Text) actualKey = "/" + filePath
+              }
+              if (existing instanceof Y.Text) {
+                const currentContent = existing.toString()
+                if (currentContent !== content) {
+                  existing.delete(0, existing.length)
+                  existing.insert(0, content)
+                }
+              } else {
+                const ytext = new Y.Text()
+                ytext.insert(0, content)
+                fMap.set(filePath, ytext)
+              }
+            }
+          }, "server")
+        },
+        removeFiles: (paths: string[]) => {
+          const fMap = room.doc.getMap("files")
+          room.doc.transact(() => {
+            for (const p of paths) {
+              fMap.delete(p)
+              fMap.delete("/" + p)
+            }
+          }, "server")
+        },
+      })
+    }
 
     // ── Join a project room ──
     socket.on("join-project", async (data: {
@@ -356,84 +454,19 @@ export function setupCollaboration(io: SocketIOServer) {
       // Start snapshot timer for this room
       startSnapshotTimer(projectId, currentRoom)
 
-      // ── Docker container: send current status then start if needed ──
+      // ── Docker container: send current status (but don't create yet) ──
+      // Containers are created lazily when the user first opens a terminal or runs code.
       const existingInfo = getContainerStatusInfo(projectId)
       if (existingInfo) {
         socket.emit("docker-status", existingInfo)
-      } else {
-        socket.emit("docker-status", { status: "creating" })
       }
+      // No else — don't emit "creating" or start container on join
 
       // Send cached stats if available
       const cachedStats = getContainerStats(projectId)
       if (cachedStats) {
         socket.emit("docker-stats", cachedStats)
       }
-
-      // Spin up Docker container in the background (no-op if already exists)
-      const room = currentRoom
-      const filesMap = room.doc.getMap("files")
-      const fileEntries = new Map<string, string>()
-      filesMap.forEach((value: unknown, key: string) => {
-        if (value && typeof (value as { toString(): string }).toString === "function") {
-          fileEntries.set(key, (value as { toString(): string }).toString())
-        }
-      })
-      ensureContainer(projectId, fileEntries)
-        .then(() => {
-          // Start bidirectional file sync once container is ready
-          startFileSync(projectId, {
-            getFiles: () => {
-              const files = new Map<string, string>()
-              const fMap = room.doc.getMap("files")
-              fMap.forEach((value: unknown, key: string) => {
-                if (value && typeof (value as { toString(): string }).toString === "function") {
-                  // Normalize: strip leading slash to match container paths
-                  const normalizedKey = key.startsWith("/") ? key.slice(1) : key
-                  files.set(normalizedKey, (value as { toString(): string }).toString())
-                }
-              })
-              return files
-            },
-            applyContainerChanges: (containerFiles: Map<string, string>) => {
-              const fMap = room.doc.getMap("files")
-              room.doc.transact(() => {
-                for (const [filePath, content] of containerFiles) {
-                  // Try both with and without leading slash
-                  let existing = fMap.get(filePath)
-                  let actualKey = filePath
-                  if (!(existing instanceof Y.Text)) {
-                    existing = fMap.get("/" + filePath) as unknown
-                    if (existing instanceof Y.Text) actualKey = "/" + filePath
-                  }
-                  if (existing instanceof Y.Text) {
-                    const currentContent = existing.toString()
-                    if (currentContent !== content) {
-                      existing.delete(0, existing.length)
-                      existing.insert(0, content)
-                    }
-                  } else {
-                    const ytext = new Y.Text()
-                    ytext.insert(0, content)
-                    fMap.set(filePath, ytext)
-                  }
-                }
-              }, "server")
-            },
-            removeFiles: (paths: string[]) => {
-              const fMap = room.doc.getMap("files")
-              room.doc.transact(() => {
-                for (const p of paths) {
-                  fMap.delete(p)
-                  fMap.delete("/" + p)
-                }
-              }, "server")
-            },
-          })
-        })
-        .catch((err) => {
-          console.error(`[iTECify] Docker container creation failed for ${projectId}:`, err)
-        })
     })
 
     // ── Yjs sync messages ──
@@ -506,6 +539,27 @@ export function setupCollaboration(io: SocketIOServer) {
       const projectId = currentProjectId
       const roomName = `project:${projectId}`
 
+      // If a streaming process is running in this session, forward input to its stdin
+      if (isProcessRunning(projectId, msg.sessionId)) {
+        // Show the input as a line in the terminal
+        room.doc.transact(() => {
+          linesArr.push([{
+            id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            type: "stdin" as const,
+            content: msg.content,
+            timestamp: new Date().toISOString(),
+            userId: msg.userId,
+          }])
+          const inputText = sessionMap.get("input")
+          if (inputText instanceof Y.Text && inputText.length > 0) {
+            inputText.delete(0, inputText.length)
+          }
+        }, "server")
+        // Write to the process stdin (with newline)
+        writeToProcess(projectId, msg.sessionId, msg.content + "\n")
+        return
+      }
+
       // Get the current working directory for this session before executing
       const stdinCwd = getSessionCwd(projectId, msg.sessionId)
 
@@ -530,29 +584,81 @@ export function setupCollaboration(io: SocketIOServer) {
       // Notify all clients that this terminal session is busy
       io.to(roomName).emit("terminal-busy", { sessionId: msg.sessionId, busy: true })
 
+      // Ensure container exists (lazy creation on first use)
+      await ensureContainerForProject()
+
       // Sync Yjs files → container before executing the command
       await syncBeforeCommand(projectId)
 
-      // Execute command in Docker container
-      const { output, exitCode, cwd } = await executeCommand(projectId, msg.sessionId, msg.content)
+      // For simple built-in commands (cd, export, etc.), use blocking executeCommand
+      const trimmedCmd = msg.content.trim()
+      const isBuiltin = /^(cd|export|unset|alias|source|\.)\b/.test(trimmedCmd)
 
-      if (output) {
-        const lineType = (exitCode !== null && exitCode !== 0) ? "stderr" as const : "stdout" as const
+      if (isBuiltin) {
+        const { output, exitCode, cwd } = await executeCommand(projectId, msg.sessionId, msg.content)
+        if (output) {
+          const lineType = (exitCode !== null && exitCode !== 0) ? "stderr" as const : "stdout" as const
+          room.doc.transact(() => {
+            linesArr.push([{
+              id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              type: lineType,
+              content: output,
+              timestamp: new Date().toISOString(),
+            }])
+          }, "server")
+        }
+        await syncAfterCommand(projectId)
+        io.to(roomName).emit("terminal-busy", { sessionId: msg.sessionId, busy: false, cwd })
+        return
+      }
+
+      // For all other commands, use streaming execution (supports interactive stdin + real-time output)
+      let outputBuffer = ""
+      let lastFlush = Date.now()
+      const FLUSH_INTERVAL = 200
+
+      const flushOutput = (type: "stdout" | "stderr") => {
+        if (!outputBuffer) return
+        const content = outputBuffer
+        outputBuffer = ""
+        lastFlush = Date.now()
         room.doc.transact(() => {
           linesArr.push([{
             id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            type: lineType,
-            content: output,
+            type,
+            content,
             timestamp: new Date().toISOString(),
           }])
         }, "server")
       }
 
-      // After command, merge container file changes back into Yjs (additive, not destructive)
-      await syncAfterCommand(projectId)
+      const flushInterval = setInterval(() => {
+        if (outputBuffer && Date.now() - lastFlush >= FLUSH_INTERVAL) {
+          flushOutput("stdout")
+        }
+      }, FLUSH_INTERVAL)
 
-      // Notify all clients that this terminal session is done + new cwd
-      io.to(roomName).emit("terminal-busy", { sessionId: msg.sessionId, busy: false, cwd })
+      await new Promise<void>((resolve) => {
+        executeStreamingCommand(
+          projectId,
+          msg.sessionId,
+          msg.content,
+          (data, type) => {
+            outputBuffer += data
+            if (type === "stderr" || outputBuffer.length > 4096) {
+              flushOutput(type)
+            }
+          },
+          (exitCode) => {
+            clearInterval(flushInterval)
+            if (outputBuffer) flushOutput(exitCode !== 0 ? "stderr" : "stdout")
+            syncAfterCommand(projectId).catch(() => {})
+            const cwd = getSessionCwd(projectId, msg.sessionId)
+            io.to(roomName).emit("terminal-busy", { sessionId: msg.sessionId, busy: false, cwd })
+            resolve()
+          },
+        )
+      })
     })
 
     // ── Run Project (auto-detect command via LLM) ────────────────────────
@@ -600,6 +706,9 @@ export function setupCollaboration(io: SocketIOServer) {
       }, "server")
 
       try {
+        // Ensure container exists (lazy creation on first use)
+        await ensureContainerForProject()
+
         // Sync files to container first
         await syncBeforeCommand(projectId)
 
@@ -625,100 +734,78 @@ export function setupCollaboration(io: SocketIOServer) {
           }])
         }, "server")
 
-        // If there's an install command, run it first (blocking)
-        if (result.installCommand) {
+        // Helper: run a command with streaming output + interactive stdin support
+        const runStreaming = (command: string, label: string) => new Promise<number | null>((resolve) => {
           const stdinLine = {
             id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
             type: "stdin" as const,
-            content: result.installCommand,
+            content: command,
             timestamp: new Date().toISOString(),
             userId: msg.userId,
             cwd: getSessionCwd(projectId, msg.sessionId),
           }
           room.doc.transact(() => { linesArr.push([stdinLine]) }, "server")
 
-          const installResult = await executeCommand(projectId, msg.sessionId, result.installCommand)
-          if (installResult.output) {
+          let outputBuffer = ""
+          let lastFlush = Date.now()
+          const FLUSH_INTERVAL = 200
+
+          const flushOutput = (type: "stdout" | "stderr") => {
+            if (!outputBuffer) return
+            const content = outputBuffer
+            outputBuffer = ""
+            lastFlush = Date.now()
             room.doc.transact(() => {
               linesArr.push([{
                 id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                type: (installResult.exitCode !== null && installResult.exitCode !== 0) ? "stderr" as const : "stdout" as const,
-                content: installResult.output,
+                type,
+                content,
                 timestamp: new Date().toISOString(),
               }])
             }, "server")
           }
 
-          // If install failed, stop
-          if (installResult.exitCode !== null && installResult.exitCode !== 0) {
-            io.to(roomName).emit("terminal-busy", { sessionId: msg.sessionId, busy: false, cwd: installResult.cwd })
-            return
-          }
-        }
+          const flushInterval = setInterval(() => {
+            if (outputBuffer && Date.now() - lastFlush >= FLUSH_INTERVAL) {
+              flushOutput("stdout")
+            }
+          }, FLUSH_INTERVAL)
 
-        // Show the run command as stdin
-        const runStdinLine = {
-          id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          type: "stdin" as const,
-          content: result.command,
-          timestamp: new Date().toISOString(),
-          userId: msg.userId,
-          cwd: getSessionCwd(projectId, msg.sessionId),
-        }
-        room.doc.transact(() => { linesArr.push([runStdinLine]) }, "server")
-
-        // Execute the run command with streaming output
-        let outputBuffer = ""
-        let lastFlush = Date.now()
-        const FLUSH_INTERVAL = 200 // ms — batch output for efficiency
-
-        const flushOutput = (type: "stdout" | "stderr") => {
-          if (!outputBuffer) return
-          const content = outputBuffer
-          outputBuffer = ""
-          lastFlush = Date.now()
-          room.doc.transact(() => {
-            linesArr.push([{
-              id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-              type,
-              content,
-              timestamp: new Date().toISOString(),
-            }])
-          }, "server")
-        }
-
-        const flushInterval = setInterval(() => {
-          if (outputBuffer && Date.now() - lastFlush >= FLUSH_INTERVAL) {
-            flushOutput("stdout")
-          }
-        }, FLUSH_INTERVAL)
-
-        await new Promise<void>((resolve) => {
           executeStreamingCommand(
             projectId,
             msg.sessionId,
-            result.command,
+            command,
             (data, type) => {
               outputBuffer += data
-              // Flush immediately for stderr or if buffer is large
               if (type === "stderr" || outputBuffer.length > 4096) {
                 flushOutput(type)
               }
             },
             (exitCode) => {
               clearInterval(flushInterval)
-              // Flush remaining output
               if (outputBuffer) flushOutput(exitCode !== 0 ? "stderr" : "stdout")
-
-              // Sync files after process ends
               syncAfterCommand(projectId).catch(() => {})
-
-              const cwd = getSessionCwd(projectId, msg.sessionId)
-              io.to(roomName).emit("terminal-busy", { sessionId: msg.sessionId, busy: false, cwd })
-              resolve()
+              resolve(exitCode)
             },
           )
         })
+
+        // If there's an install command, run it first (streaming + interactive)
+        if (result.installCommand) {
+          const installExitCode = await runStreaming(result.installCommand, "install")
+
+          // If install failed, stop
+          if (installExitCode !== null && installExitCode !== 0) {
+            io.to(roomName).emit("terminal-busy", { sessionId: msg.sessionId, busy: false, cwd: getSessionCwd(projectId, msg.sessionId) })
+            return
+          }
+        }
+
+        // Execute the run command with streaming output
+        const runExitCode = await runStreaming(result.command, "run")
+
+        const cwd = getSessionCwd(projectId, msg.sessionId)
+        io.to(roomName).emit("terminal-busy", { sessionId: msg.sessionId, busy: false, cwd })
       } catch (err) {
         room.doc.transact(() => {
           linesArr.push([{
@@ -838,6 +925,20 @@ export function setupCollaboration(io: SocketIOServer) {
 
       // Reset terminal cwds for all clients
       io.to(roomName).emit("terminal-busy", { sessionId: "__all__", busy: false, cwd: "/home/itecify/workspace" })
+    })
+
+    // ── Container Destroy (when all terminals are closed) ────────────────
+    socket.on("container-destroy", async () => {
+      if (!currentProjectId) return
+      const projectId = currentProjectId
+      const roomName = `project:${projectId}`
+
+      console.log(`[iTECify] Container destroy requested for ${projectId} (all terminals closed)`)
+
+      stopFileSync(projectId)
+      await destroyContainer(projectId)
+
+      io.to(roomName).emit("docker-status", { status: "destroyed" })
     })
 
     // ── AI Chat ──────────────────────────────────────────────────────────

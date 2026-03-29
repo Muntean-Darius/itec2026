@@ -378,14 +378,15 @@ export function WorkspaceShell({
       collab.interruptTerminal(activeTerminalId)
       return
     }
-    // Create a new "Run" terminal session and invoke run-project
-    const newId = collab.createTerminalSession("Run")
-    if (newId) {
-      setActiveTerminalId(newId)
+    // Reuse existing "Run" terminal if one exists, otherwise create a new one
+    const existingRun = collab.terminalSessions.find(s => s.name === "Run")
+    const targetId = existingRun?.id ?? collab.createTerminalSession("Run")
+    if (targetId) {
+      setActiveTerminalId(targetId)
       // Small delay to ensure the Yjs session is synced to server
       setTimeout(() => {
-        collab.runProject(newId)
-      }, 300)
+        collab.runProject(targetId)
+      }, existingRun ? 50 : 300)
     }
   }, [isRunning, activeTerminalId, collab])
 
@@ -742,7 +743,7 @@ export function WorkspaceShell({
                 variant={isRunning ? "destructive" : "default"}
                 onClick={handleRun}
                 className="h-7 gap-1.5 px-3 text-xs"
-                disabled={!collab.connected || collab.dockerStatus !== "ready"}
+                disabled={!collab.connected || collab.dockerStatus === "creating"}
               >
                 {isRunning ? (
                   <>
@@ -760,8 +761,8 @@ export function WorkspaceShell({
             <TooltipContent>
               {!collab.connected
                 ? "Server connection required to run code"
-                : collab.dockerStatus !== "ready"
-                  ? "Waiting for Docker container..."
+                : collab.dockerStatus === "creating"
+                  ? "Docker container is starting..."
                   : isRunning
                     ? "Stop the running process (Ctrl+C)"
                     : "Auto-detect & run the project"}
@@ -1078,9 +1079,9 @@ export function WorkspaceShell({
                   currentUserId={currentUser.id}
                   dockerStatus={collab.dockerStatus}
                   dockerError={collab.dockerError}
+                  dockerLogs={collab.dockerLogs}
                   terminalBusy={collab.terminalBusy}
                   terminalCwds={collab.terminalCwds}
-                  onResetContainer={collab.resetContainer}
                   onInterrupt={(sessionId) => collab.interruptTerminal(sessionId)}
                 />
               </div>
@@ -1104,28 +1105,53 @@ export function WorkspaceShell({
                   const restoredState = resolveSnapshotFileStates(snapshot)
                   if (restoredState) {
                     const restoredEntries = Object.entries(restoredState)
-                    const restoredPaths = new Set(restoredEntries.map(([path]) => path))
-                    const livePaths = new Set(liveFiles.map((f) => f.path))
 
-                    // Batch all Yjs mutations in a single doc transaction so the
-                    // entire restore is one atomic Yjs update for other clients.
+                    // Direct Yjs doc manipulation — avoids nested transactions
+                    // from collab.updateFileContent/deleteFile helpers which can
+                    // silently fail inside an outer doc.transact() wrapper.
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const ydoc = collab.getYdoc() as any
-                    const txnBody = () => {
-                      for (const livePath of livePaths) {
-                        if (!restoredPaths.has(livePath)) {
-                          collab.deleteFile(livePath)
-                        }
-                      }
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const Y = collab.getYjs() as any
 
-                      for (const [path, content] of restoredEntries) {
-                        collab.updateFileContent(path, content)
-                      }
-                    }
-                    if (ydoc?.transact) {
-                      ydoc.transact(txnBody)
-                    } else {
-                      txnBody()
+                    if (ydoc && Y) {
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      const filesMap = ydoc.getMap("files") as any
+
+                      // Build a set of normalised restore keys (without "/")
+                      const restoreKeys = new Set(
+                        restoredEntries.map(([p]) => (p.startsWith("/") ? p.slice(1) : p))
+                      )
+
+                      ydoc.transact(() => {
+                        // 1. Delete files not present in the snapshot
+                        const keysToDelete: string[] = []
+                        ;(filesMap as any).forEach((_v: unknown, key: string) => {
+                          const norm = key.startsWith("/") ? key.slice(1) : key
+                          if (!restoreKeys.has(norm)) keysToDelete.push(key)
+                        })
+                        for (const k of keysToDelete) (filesMap as any).delete(k)
+
+                        // 2. Update or create every file from the snapshot
+                        for (const [path, content] of restoredEntries) {
+                          const key = path.startsWith("/") ? path.slice(1) : path
+                          let ytext = (filesMap as any).get(key)
+                          if (!(ytext instanceof Y.Text)) {
+                            // Try with leading "/" just in case
+                            ytext = (filesMap as any).get("/" + key)
+                          }
+                          if (ytext instanceof Y.Text) {
+                            if (ytext.toString() !== content) {
+                              ytext.delete(0, ytext.length)
+                              ytext.insert(0, content)
+                            }
+                          } else {
+                            const nt = new Y.Text()
+                            nt.insert(0, content)
+                            ;(filesMap as any).set(key, nt)
+                          }
+                        }
+                      })
                     }
 
                     const firstPath = restoredEntries[0]?.[0]
@@ -1243,12 +1269,58 @@ export function WorkspaceShell({
               <TooltipContent>{collab.dockerError || "Unknown error"}</TooltipContent>
             </Tooltip>
           )}
-          {collab.connected && (
+          {collab.dockerStatus === "destroyed" && (
             <span className="flex items-center gap-1">
-              <span className="inline-flex h-1.5 w-1.5 rounded-full bg-success" />
-              Connected
+              <span className="inline-flex h-1.5 w-1.5 rounded-full bg-text-tertiary" />
+              Docker stopped
             </span>
           )}
+          {collab.dockerStatus === null && (
+            <span className="flex items-center gap-1">
+              <span className="inline-flex h-1.5 w-1.5 rounded-full bg-text-tertiary opacity-50" />
+              Docker idle
+            </span>
+          )}
+          {collab.dockerStatus === "ready" && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => {
+                    if (confirm("Reset the Docker container? This will destroy the current environment and recreate it from your files.")) {
+                      collab.resetContainer()
+                    }
+                  }}
+                  className="flex items-center gap-1 rounded px-1 transition-colors hover:bg-hover hover:text-text-secondary"
+                >
+                  <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                    <path d="M3 3v5h5" />
+                  </svg>
+                  Reset
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>Reset Docker container</TooltipContent>
+            </Tooltip>
+          )}
+          {collab.connected && (() => {
+            const othersCount = livePresence.filter(p => p.id.split(":")[0] !== currentUser.id).length
+            const label = othersCount === 0
+              ? "Just you"
+              : othersCount === 1
+                ? "1 collaborator"
+                : `${othersCount} collaborators`
+            return (
+              <span className="flex items-center gap-1">
+                <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="9" cy="7" r="4" />
+                  <path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2" />
+                  <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                  <path d="M21 21v-2a4 4 0 0 0-3-3.87" />
+                </svg>
+                {label}
+              </span>
+            )
+          })()}
         </div>
         <div className="flex items-center gap-3">
           {collab.dockerStats && collab.dockerStatus === "ready" && (

@@ -1,7 +1,7 @@
 "use client"
 
 import { useRef, useEffect, useState, useCallback } from "react"
-import { Terminal as TermIcon, Plus, X, RotateCcw } from "lucide-react"
+import { Terminal as TermIcon, Plus, X } from "lucide-react"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
@@ -28,12 +28,12 @@ interface TerminalPanelProps {
   dockerStatus?: DockerStatus
   /** Docker error message */
   dockerError?: string | null
+  /** Docker creation log lines */
+  dockerLogs?: string[]
   /** Per-session busy state (command is running) */
   terminalBusy?: Record<string, boolean>
   /** Per-session current working directory */
   terminalCwds?: Record<string, string>
-  /** Callback to reset the Docker container */
-  onResetContainer?: () => void
   /** Callback to send CTRL+C interrupt to a session */
   onInterrupt?: (sessionId: string) => void
 }
@@ -58,9 +58,9 @@ export function TerminalPanel({
   currentUserId,
   dockerStatus,
   dockerError,
+  dockerLogs = [],
   terminalBusy = {},
   terminalCwds = {},
-  onResetContainer,
   onInterrupt,
 }: TerminalPanelProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -200,18 +200,21 @@ export function TerminalPanel({
     }
 
     const history = commandHistory[sessionId] ?? []
+    const isBusy = terminalBusy[sessionId] ?? false
 
-    if (e.key === "Enter" && inputValue.trim()) {
-      const cmd = inputValue.trim()
-      // Add to command history
-      setCommandHistory((prev) => {
-        const sessionHist = prev[sessionId] ?? []
-        return { ...prev, [sessionId]: [...sessionHist, cmd] }
-      })
+    if (e.key === "Enter" && (inputValue.trim() || isBusy)) {
+      const cmd = inputValue
+      if (!isBusy && cmd.trim()) {
+        // Add to command history (only for shell commands, not process input)
+        setCommandHistory((prev) => {
+          const sessionHist = prev[sessionId] ?? []
+          return { ...prev, [sessionId]: [...sessionHist, cmd.trim()] }
+        })
+      }
       setHistoryIndex(-1)
       historyStash.current = ""
 
-      onInput?.(cmd)
+      onInput?.(isBusy ? cmd : cmd.trim())
       setInputValue("")
       // Clear Y.Text
       if (inputYText) {
@@ -293,7 +296,7 @@ export function TerminalPanel({
     })
 
   return (
-    <div className="flex h-full flex-col bg-terminal-bg">
+    <div className="relative flex h-full flex-col bg-terminal-bg">
       {/* Terminal header with session tabs */}
       <div className="flex h-8 shrink-0 items-center border-b border-border-subtle px-1">
         <div className="flex flex-1 items-center gap-0.5 overflow-x-auto">
@@ -344,25 +347,7 @@ export function TerminalPanel({
           </button>
         </div>
 
-        {/* Reset container button */}
-        {onResetContainer && dockerStatus === "ready" && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={() => {
-                  if (confirm("Reset the Docker container? This will destroy the current environment and recreate it from your files.")) {
-                    onResetContainer()
-                  }
-                }}
-                className="flex items-center justify-center rounded-md p-1 text-text-tertiary transition-colors hover:bg-hover hover:text-warning"
-                title="Reset container"
-              >
-                <RotateCcw className="h-3 w-3" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Reset Docker container</TooltipContent>
-          </Tooltip>
-        )}
+
 
         {isSessionBusy && (
           <span className="ml-auto flex items-center gap-1.5 pr-2">
@@ -393,6 +378,14 @@ export function TerminalPanel({
                 <span className="text-xs text-error">Docker error</span>
               </>
             )}
+            {dockerStatus === "destroyed" && (
+              <>
+                <span className="relative flex h-2 w-2">
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-text-tertiary" />
+                </span>
+                <span className="text-xs text-text-tertiary">Docker stopped</span>
+              </>
+            )}
           </span>
         )}
 
@@ -404,43 +397,61 @@ export function TerminalPanel({
             <span className="text-xs text-success">Docker ready</span>
           </span>
         )}
+
+        {!isSessionBusy && dockerStatus === null && (
+          <span className="ml-auto flex items-center gap-1.5 pr-2">
+            <span className="relative flex h-2 w-2">
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-text-tertiary opacity-50" />
+            </span>
+            <span className="text-xs text-text-tertiary">Docker idle</span>
+          </span>
+        )}
       </div>
 
-      {/* Docker loading overlay */}
-      {dockerStatus && dockerStatus !== "ready" && activeSession && (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-text-tertiary">
-          {dockerStatus === "creating" && (
-            <>
-              <div className="flex items-center gap-2">
-                <svg className="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                <span className="text-sm font-medium">Starting Docker instance...</span>
-              </div>
-              <span className="text-xs text-text-tertiary">
-                Your workspace container is being prepared. This usually takes a few seconds.
-              </span>
-            </>
-          )}
-          {dockerStatus === "error" && (
-            <>
-              <span className="text-sm font-medium text-error">Docker instance failed to start</span>
-              {dockerError && (
-                <code className="max-w-md rounded-md bg-elevated px-3 py-2 text-xs text-error/80 break-all">
-                  {dockerError}
-                </code>
-              )}
-              <span className="text-xs text-text-tertiary">
-                Try refreshing the page. If the problem persists, contact support.
-              </span>
-            </>
+      {/* Docker loading overlay — only when actively creating container */}
+      {dockerStatus === "creating" && activeSession && (
+        <div className="absolute inset-0 top-8 z-10 flex flex-col items-center justify-center gap-3 bg-terminal-bg/90 text-text-tertiary">
+          <div className="flex items-center gap-2">
+            <svg className="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            <span className="text-sm font-medium">Starting Docker instance...</span>
+          </div>
+          {dockerLogs.length > 0 ? (
+            <div className="w-full max-w-sm rounded-md bg-black/40 px-3 py-2 font-mono text-xs text-text-secondary">
+              {dockerLogs.map((line, i) => (
+                <div key={i} className="flex items-center gap-1.5 leading-relaxed">
+                  <span className="select-none text-brand">$</span>
+                  <span>{line}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <span className="text-xs text-text-tertiary">
+              Your workspace container is being prepared. This usually takes a few seconds.
+            </span>
           )}
         </div>
       )}
 
+      {/* Docker error overlay */}
+      {dockerStatus === "error" && activeSession && (
+        <div className="absolute inset-0 top-8 z-10 flex flex-col items-center justify-center gap-3 bg-terminal-bg/90 text-text-tertiary">
+          <span className="text-sm font-medium text-error">Docker instance failed to start</span>
+          {dockerError && (
+            <code className="max-w-md rounded-md bg-elevated px-3 py-2 text-xs text-error/80 break-all">
+              {dockerError}
+            </code>
+          )}
+          <span className="text-xs text-text-tertiary">
+            Try refreshing the page. If the problem persists, contact support.
+          </span>
+        </div>
+      )}
+
       {/* Terminal output for active session */}
-      {dockerStatus === "ready" && activeSession ? (
+      {activeSession ? (
         <ScrollArea
           className="flex-1 font-mono text-xs"
           onClick={() => inputRef.current?.focus()}
@@ -468,15 +479,23 @@ export function TerminalPanel({
             })}
 
             {isSessionBusy && (
-              <div className="mt-1">
-                <span className="inline-block animate-pulse text-text-tertiary">▊</span>
-                {/* Hidden input to catch CTRL+C while command is running */}
-                <input
-                  ref={inputRef}
-                  onKeyDown={handleInputKeyDown}
-                  className="absolute opacity-0 w-0 h-0"
-                  autoFocus
-                />
+              <div className="relative">
+                <div className="flex items-center gap-1">
+                  <span className="inline-block animate-pulse text-text-tertiary">▊</span>
+                  <div className="relative flex-1">
+                    <input
+                      ref={inputRef}
+                      value={inputValue}
+                      onChange={handleInputChange}
+                      onKeyDown={handleInputKeyDown}
+                      className="w-full bg-transparent text-text-primary outline-none font-mono text-xs caret-brand"
+                      spellCheck={false}
+                      autoComplete="off"
+                      placeholder=""
+                      autoFocus
+                    />
+                  </div>
+                </div>
               </div>
             )}
 

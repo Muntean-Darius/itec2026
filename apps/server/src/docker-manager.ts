@@ -93,6 +93,9 @@ export interface ContainerStats {
   memoryPercent: number
 }
 
+/** How long a container can be idle before auto-destruction (ms) */
+const IDLE_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
+
 interface WorkspaceContainer {
   containerId: string
   container: Docker.Container
@@ -103,6 +106,10 @@ interface WorkspaceContainer {
   /** Stats polling interval */
   statsInterval: ReturnType<typeof setInterval> | null
   lastStats: ContainerStats | null
+  /** Timestamp of the last command activity */
+  lastActivityAt: number
+  /** Idle auto-destroy timer */
+  idleTimer: ReturnType<typeof setTimeout> | null
 }
 
 interface ExecSession {
@@ -145,6 +152,21 @@ function emitStats(projectId: string, stats: ContainerStats) {
   }
 }
 
+// Listeners for log messages (during container creation)
+type LogListener = (projectId: string, message: string) => void
+const logListeners = new Set<LogListener>()
+
+export function onContainerLog(listener: LogListener): () => void {
+  logListeners.add(listener)
+  return () => { logListeners.delete(listener) }
+}
+
+function emitLog(projectId: string, message: string) {
+  for (const listener of logListeners) {
+    listener(projectId, message)
+  }
+}
+
 /**
  * Get the most recent container stats (cached from polling).
  */
@@ -182,9 +204,12 @@ export async function ensureContainer(
     execSessions: new Map(),
     statsInterval: null,
     lastStats: null,
+    lastActivityAt: Date.now(),
+    idleTimer: null,
   }
   containers.set(projectId, entry)
   emitStatus(projectId, "creating")
+  emitLog(projectId, "Pulling workspace image\u2026")
 
   try {
     // Pull image if not available (ignore errors — image may already exist)
@@ -200,6 +225,7 @@ export async function ensureContainer(
       // Image may already be present locally
     }
 
+    emitLog(projectId, "Creating container\u2026")
     // Create container with security constraints
     const container = await docker.createContainer({
       Image: WORKSPACE_IMAGE,
@@ -233,6 +259,7 @@ export async function ensureContainer(
     entry.containerId = container.id
     entry.container = container
 
+    emitLog(projectId, "Setting up sandbox…")
     // ── Sandbox hardening ──
     // 1. Create the workspace user & directory structure
     await execInContainer(entry, ["sh", "-c", [
@@ -274,7 +301,9 @@ WRAPPER`,
       `chmod 755 ${CONTAINER_WORKDIR}`,
     ].join(" && ")])
 
+    emitLog(projectId, "Writing project files\u2026")
     // Write initial files into the container
+    emitLog(projectId, "Writing project files…")
     await syncFilesToContainer(projectId, files)
 
     // Ensure all files are owned by the sandbox user so terminal commands work
@@ -283,11 +312,15 @@ WRAPPER`,
     } catch { /* non-critical */ }
 
     entry.status = "ready"
+    emitLog(projectId, "Container ready ✓")
     emitStatus(projectId, "ready")
     console.log(`[iTECify Docker] Container started for project ${projectId}: ${container.id.slice(0, 12)}`)
 
     // Start stats polling
     startStatsPolling(projectId, entry)
+
+    // Start idle auto-destroy timer
+    resetIdleTimer(projectId, entry)
   } catch (err) {
     const errorMsg = (err as Error).message || "Unknown error"
     console.error(`[iTECify Docker] Failed to create container for ${projectId}:`, err)
@@ -343,12 +376,45 @@ function calculateStats(raw: Docker.ContainerStats): ContainerStats {
   }
 }
 
+// ─── Idle Auto-Destroy ───────────────────────────────────────────────────
+
+function resetIdleTimer(projectId: string, entry: WorkspaceContainer) {
+  if (entry.idleTimer) clearTimeout(entry.idleTimer)
+  entry.lastActivityAt = Date.now()
+  entry.idleTimer = setTimeout(() => {
+    // Check that no processes are actively running
+    const hasRunning = [...runningProcesses.keys()].some(k => k.startsWith(`${projectId}:`))
+    if (hasRunning) {
+      // Still active — reschedule
+      resetIdleTimer(projectId, entry)
+      return
+    }
+    console.log(`[iTECify Docker] Auto-destroying idle container for project ${projectId}`)
+    destroyContainer(projectId).catch(() => {})
+  }, IDLE_TIMEOUT_MS)
+}
+
+/**
+ * Record activity on a container to reset its idle timer.
+ */
+export function touchContainerActivity(projectId: string): void {
+  const entry = containers.get(projectId)
+  if (!entry || entry.status !== "ready") return
+  resetIdleTimer(projectId, entry)
+}
+
 /**
  * Destroy the container for a project (cleanup).
  */
 export async function destroyContainer(projectId: string): Promise<void> {
   const entry = containers.get(projectId)
   if (!entry) return
+
+  // Stop idle timer
+  if (entry.idleTimer) {
+    clearTimeout(entry.idleTimer)
+    entry.idleTimer = null
+  }
 
   // Stop file sync
   stopFileSync(projectId)
@@ -681,6 +747,8 @@ export async function executeCommand(
     }
   }
 
+  touchContainerActivity(projectId)
+
   const cwdKey = `${projectId}:${terminalSessionId}`
   const cwd = sessionCwds.get(cwdKey) ?? CONTAINER_WORKDIR
 
@@ -697,6 +765,17 @@ export async function executeCommand(
       WorkingDir: CONTAINER_WORKDIR,
       // Run as the sandboxed user
       User: "itecify",
+      // Explicitly pass the full PATH so language runtimes installed
+      // system-wide or via rustup/nvm into /root are accessible regardless
+      // of which user the shell runs as.
+      Env: [
+        "PATH=/usr/local/cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.cargo/bin",
+        "CARGO_HOME=/usr/local/cargo",
+        "RUSTUP_HOME=/usr/local/rustup",
+        "HOME=/home/itecify",
+        "USER=itecify",
+        `GOPATH=/home/itecify/go`,
+      ],
     })
 
     const stream = await exec.start({ hijack: true, stdin: false })
@@ -767,8 +846,8 @@ export async function executeCommand(
 
 // ─── Streaming / Long-Running Execution ──────────────────────────────────
 
-/** Active long-running processes — projectId:sessionId → exec PID */
-const runningProcesses = new Map<string, { pid: number; containerId: string }>()
+/** Active long-running processes — projectId:sessionId → exec PID + stdin stream */
+const runningProcesses = new Map<string, { pid: number; containerId: string; stdinStream: NodeJS.ReadWriteStream }>()
 
 /**
  * Execute a long-running command (like a dev server) with streaming output.
@@ -797,6 +876,8 @@ export async function executeStreamingCommand(
   const cwdKey = `${projectId}:${terminalSessionId}`
   const cwd = sessionCwds.get(cwdKey) ?? CONTAINER_WORKDIR
 
+  touchContainerActivity(projectId)
+
   try {
     // Write the command to a temp script file so we can get its PID and kill it later
     const scriptPath = `/tmp/itecify-run-${terminalSessionId.replace(/[^a-zA-Z0-9-]/g, "")}.sh`
@@ -807,11 +888,12 @@ export async function executeStreamingCommand(
       Cmd: ["sh", "-c", `echo "$$" && exec sh ${scriptPath}`],
       AttachStdout: true,
       AttachStderr: true,
+      AttachStdin: true,
       WorkingDir: CONTAINER_WORKDIR,
       User: "itecify",
     })
 
-    const stream = await exec.start({ hijack: true, stdin: false })
+    const stream = await exec.start({ hijack: true, stdin: true })
 
     const stdout = new PassThrough()
     const stderr = new PassThrough()
@@ -829,7 +911,7 @@ export async function executeStreamingCommand(
           const pidStr = pidBuffer.substring(0, newlineIdx).trim()
           const pid = parseInt(pidStr, 10)
           if (!isNaN(pid)) {
-            runningProcesses.set(cwdKey, { pid, containerId: entry.containerId })
+            runningProcesses.set(cwdKey, { pid, containerId: entry.containerId, stdinStream: stream })
           }
           gotPid = true
           // Send the remainder after the PID line
@@ -903,6 +985,17 @@ export async function killRunningProcess(
  */
 export function isProcessRunning(projectId: string, terminalSessionId: string): boolean {
   return runningProcesses.has(`${projectId}:${terminalSessionId}`)
+}
+
+/**
+ * Write data to the stdin of a running process.
+ */
+export function writeToProcess(projectId: string, terminalSessionId: string, data: string): void {
+  const proc = runningProcesses.get(`${projectId}:${terminalSessionId}`)
+  if (!proc) return
+  try {
+    proc.stdinStream.write(data)
+  } catch { /* stream may have ended */ }
 }
 
 // ─── Bidirectional File Sync Manager ─────────────────────────────────────
