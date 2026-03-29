@@ -1,7 +1,8 @@
 import { createServerClient } from "@supabase/ssr"
 import { cookies } from "next/headers"
+import type { NextResponse } from "next/server"
 
-export async function createClient() {
+export async function createClient(response?: NextResponse) {
   const cookieStore = await cookies()
 
   return createServerClient(
@@ -18,9 +19,17 @@ export async function createClient() {
               cookieStore.set(name, value, options)
             )
           } catch (error) {
-            // Expected in Server Components (read-only), but log in other contexts
-            // so auth issues don't fail silently in Route Handlers / Server Actions.
-            console.warn("[supabase/server] setAll failed:", error)
+            // Expected in Server Components (read-only); route handlers can pass a
+            // response so auth cookies are still attached to the outgoing response.
+            if (!response) {
+              console.warn("[supabase/server] setAll failed:", error)
+            }
+          }
+
+          if (response) {
+            cookiesToSet.forEach(({ name, value, options }) =>
+              response.cookies.set(name, value, options)
+            )
           }
         },
       },
