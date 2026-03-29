@@ -34,6 +34,8 @@ interface TerminalPanelProps {
   terminalCwds?: Record<string, string>
   /** Callback to reset the Docker container */
   onResetContainer?: () => void
+  /** Callback to send CTRL+C interrupt to a session */
+  onInterrupt?: (sessionId: string) => void
 }
 
 /** Format cwd for display: replace /home/itecify/workspace with ~ */
@@ -59,6 +61,7 @@ export function TerminalPanel({
   terminalBusy = {},
   terminalCwds = {},
   onResetContainer,
+  onInterrupt,
 }: TerminalPanelProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -183,6 +186,19 @@ export function TerminalPanel({
   const handleInputKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     const sessionId = activeSessionId
     if (!sessionId) return
+
+    // CTRL+C: interrupt running process
+    if (e.key === "c" && (e.ctrlKey || e.metaKey)) {
+      const isBusy = terminalBusy[sessionId] ?? false
+      if (isBusy && onInterrupt) {
+        e.preventDefault()
+        onInterrupt(sessionId)
+        return
+      }
+      // If not busy, let the browser handle copy
+      return
+    }
+
     const history = commandHistory[sessionId] ?? []
 
     if (e.key === "Enter" && inputValue.trim()) {
@@ -235,7 +251,7 @@ export function TerminalPanel({
         syncInputToYText(histCmd)
       }
     }
-  }, [inputValue, onInput, inputYText, activeSessionId, commandHistory, historyIndex])
+  }, [inputValue, onInput, inputYText, activeSessionId, commandHistory, historyIndex, terminalBusy, onInterrupt])
 
   /** Helper: sync a value to Y.Text */
   const syncInputToYText = useCallback((value: string) => {
@@ -454,6 +470,13 @@ export function TerminalPanel({
             {isSessionBusy && (
               <div className="mt-1">
                 <span className="inline-block animate-pulse text-text-tertiary">▊</span>
+                {/* Hidden input to catch CTRL+C while command is running */}
+                <input
+                  ref={inputRef}
+                  onKeyDown={handleInputKeyDown}
+                  className="absolute opacity-0 w-0 h-0"
+                  autoFocus
+                />
               </div>
             )}
 

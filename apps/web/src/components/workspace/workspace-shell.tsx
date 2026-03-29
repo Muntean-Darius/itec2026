@@ -373,9 +373,21 @@ export function WorkspaceShell({
 
   const handleRun = useCallback(() => {
     setTerminalOpen(true)
-    // Focus the terminal input — the actual command runs via terminal input
-    // This button just ensures the terminal is visible
-  }, [])
+    if (isRunning && activeTerminalId) {
+      // If already running, send interrupt
+      collab.interruptTerminal(activeTerminalId)
+      return
+    }
+    // Create a new "Run" terminal session and invoke run-project
+    const newId = collab.createTerminalSession("Run")
+    if (newId) {
+      setActiveTerminalId(newId)
+      // Small delay to ensure the Yjs session is synced to server
+      setTimeout(() => {
+        collab.runProject(newId)
+      }, 300)
+    }
+  }, [isRunning, activeTerminalId, collab])
 
   const handleCreateFile = useCallback(
     (path: string) => {
@@ -730,12 +742,12 @@ export function WorkspaceShell({
                 variant={isRunning ? "destructive" : "default"}
                 onClick={handleRun}
                 className="h-7 gap-1.5 px-3 text-xs"
-                disabled={!collab.connected}
+                disabled={!collab.connected || collab.dockerStatus !== "ready"}
               >
                 {isRunning ? (
                   <>
                     <Square className="h-3 w-3" />
-                    Running...
+                    Stop
                   </>
                 ) : (
                   <>
@@ -745,9 +757,15 @@ export function WorkspaceShell({
                 )}
               </Button>
             </TooltipTrigger>
-            {!collab.connected && (
-              <TooltipContent>Server connection required to run code</TooltipContent>
-            )}
+            <TooltipContent>
+              {!collab.connected
+                ? "Server connection required to run code"
+                : collab.dockerStatus !== "ready"
+                  ? "Waiting for Docker container..."
+                  : isRunning
+                    ? "Stop the running process (Ctrl+C)"
+                    : "Auto-detect & run the project"}
+            </TooltipContent>
           </Tooltip>
         </div>
 
@@ -1063,6 +1081,7 @@ export function WorkspaceShell({
                   terminalBusy={collab.terminalBusy}
                   terminalCwds={collab.terminalCwds}
                   onResetContainer={collab.resetContainer}
+                  onInterrupt={(sessionId) => collab.interruptTerminal(sessionId)}
                 />
               </div>
             </>

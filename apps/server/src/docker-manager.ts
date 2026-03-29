@@ -27,13 +27,16 @@ const DOCKER_CERT_FILE = process.env.DOCKER_CERT_FILE || undefined
 const DOCKER_KEY_FILE = process.env.DOCKER_KEY_FILE || undefined
 
 // Base image used for workspace containers
-const WORKSPACE_IMAGE = process.env.WORKSPACE_IMAGE || "node:22-slim"
+const WORKSPACE_IMAGE = process.env.WORKSPACE_IMAGE || "paulsoporan/itecify-runner:latest"
 
 // Working directory inside the container
 const CONTAINER_WORKDIR = "/home/itecify/workspace"
 
 /** Maximum execution time for a single command (seconds) */
 const COMMAND_TIMEOUT_SECONDS = 30
+
+/** Maximum execution time for long-running processes like dev servers (seconds) */
+const LONG_RUNNING_TIMEOUT_SECONDS = 600
 
 /** Max number of processes allowed inside the container */
 const MAX_PIDS = 256
@@ -209,7 +212,7 @@ export async function ensureContainer(
       },
       HostConfig: {
         // Limit resources per container
-        Memory: 512 * 1024 * 1024,   // 512 MB
+        Memory: 1024 * 1024 * 1024,  // 1 GB
         NanoCpus: 1_000_000_000,     // 1 CPU
         PidsLimit: MAX_PIDS,         // Prevent fork bombs
         // Drop dangerous capabilities
@@ -760,6 +763,146 @@ export async function executeCommand(
       cwd,
     }
   }
+}
+
+// ─── Streaming / Long-Running Execution ──────────────────────────────────
+
+/** Active long-running processes — projectId:sessionId → exec PID */
+const runningProcesses = new Map<string, { pid: number; containerId: string }>()
+
+/**
+ * Execute a long-running command (like a dev server) with streaming output.
+ * Returns immediately; output is streamed via the onOutput callback.
+ * The process can be killed via killRunningProcess().
+ */
+export async function executeStreamingCommand(
+  projectId: string,
+  terminalSessionId: string,
+  command: string,
+  onOutput: (data: string, type: "stdout" | "stderr") => void,
+  onExit: (exitCode: number | null) => void,
+): Promise<void> {
+  const entry = containers.get(projectId)
+  if (!entry || entry.status !== "ready") {
+    onOutput(
+      entry?.status === "creating"
+        ? "⏳ Docker instance is starting up, please wait...\n"
+        : "❌ Docker instance is not available.\n",
+      "stderr"
+    )
+    onExit(1)
+    return
+  }
+
+  const cwdKey = `${projectId}:${terminalSessionId}`
+  const cwd = sessionCwds.get(cwdKey) ?? CONTAINER_WORKDIR
+
+  try {
+    // Write the command to a temp script file so we can get its PID and kill it later
+    const scriptPath = `/tmp/itecify-run-${terminalSessionId.replace(/[^a-zA-Z0-9-]/g, "")}.sh`
+    const wrappedScript = `cd ${JSON.stringify(cwd)} 2>/dev/null; exec ${command}`
+    await execInContainer(entry, ["sh", "-c", `cat > ${scriptPath} << 'ITECIFY_SCRIPT_EOF'\n${wrappedScript}\nITECIFY_SCRIPT_EOF\nchmod +x ${scriptPath}`])
+
+    const exec = await entry.container.exec({
+      Cmd: ["sh", "-c", `echo "$$" && exec sh ${scriptPath}`],
+      AttachStdout: true,
+      AttachStderr: true,
+      WorkingDir: CONTAINER_WORKDIR,
+      User: "itecify",
+    })
+
+    const stream = await exec.start({ hijack: true, stdin: false })
+
+    const stdout = new PassThrough()
+    const stderr = new PassThrough()
+    docker.modem.demuxStream(stream, stdout, stderr)
+
+    let gotPid = false
+    let pidBuffer = ""
+
+    stdout.on("data", (chunk: Buffer) => {
+      const text = chunk.toString("utf-8")
+      if (!gotPid) {
+        pidBuffer += text
+        const newlineIdx = pidBuffer.indexOf("\n")
+        if (newlineIdx !== -1) {
+          const pidStr = pidBuffer.substring(0, newlineIdx).trim()
+          const pid = parseInt(pidStr, 10)
+          if (!isNaN(pid)) {
+            runningProcesses.set(cwdKey, { pid, containerId: entry.containerId })
+          }
+          gotPid = true
+          // Send the remainder after the PID line
+          const remainder = pidBuffer.substring(newlineIdx + 1)
+          if (remainder) onOutput(remainder, "stdout")
+        }
+      } else {
+        onOutput(text, "stdout")
+      }
+    })
+
+    stderr.on("data", (chunk: Buffer) => {
+      onOutput(chunk.toString("utf-8"), "stderr")
+    })
+
+    stream.on("end", () => {
+      runningProcesses.delete(cwdKey)
+      exec.inspect().then((info) => {
+        onExit(info.ExitCode ?? null)
+      }).catch(() => {
+        onExit(null)
+      })
+    })
+
+    stream.on("error", (err: Error) => {
+      runningProcesses.delete(cwdKey)
+      onOutput(`\nProcess error: ${err.message}\n`, "stderr")
+      onExit(1)
+    })
+
+    // Safety timeout for long-running processes
+    setTimeout(() => {
+      if (runningProcesses.has(cwdKey)) {
+        killRunningProcess(projectId, terminalSessionId).catch(() => {})
+        onOutput(`\n⏱ Process killed: exceeded ${LONG_RUNNING_TIMEOUT_SECONDS}s time limit\n`, "stderr")
+      }
+    }, LONG_RUNNING_TIMEOUT_SECONDS * 1_000)
+  } catch (err) {
+    onOutput(`Error starting process: ${(err as Error).message}\n`, "stderr")
+    onExit(1)
+  }
+}
+
+/**
+ * Kill a running process in the container (CTRL+C equivalent).
+ */
+export async function killRunningProcess(
+  projectId: string,
+  terminalSessionId: string,
+): Promise<boolean> {
+  const cwdKey = `${projectId}:${terminalSessionId}`
+  const proc = runningProcesses.get(cwdKey)
+  if (!proc) return false
+
+  const entry = containers.get(projectId)
+  if (!entry || entry.status !== "ready") return false
+
+  try {
+    // Kill the process group tree
+    await execInContainer(entry, ["sh", "-c", `kill -TERM -${proc.pid} 2>/dev/null; kill -TERM ${proc.pid} 2>/dev/null; sleep 0.5; kill -KILL ${proc.pid} 2>/dev/null || true`])
+    runningProcesses.delete(cwdKey)
+    return true
+  } catch {
+    runningProcesses.delete(cwdKey)
+    return false
+  }
+}
+
+/**
+ * Check if a process is currently running for a given terminal session.
+ */
+export function isProcessRunning(projectId: string, terminalSessionId: string): boolean {
+  return runningProcesses.has(`${projectId}:${terminalSessionId}`)
 }
 
 // ─── Bidirectional File Sync Manager ─────────────────────────────────────

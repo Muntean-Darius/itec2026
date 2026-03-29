@@ -110,6 +110,10 @@ export interface UseCollaborationReturn {
   deleteAgent: (id: string) => void
   /** Reset the Docker container (destroy and recreate) */
   resetContainer: () => void
+  /** Run the project automatically (LLM detects command, creates terminal) */
+  runProject: (sessionId: string) => void
+  /** Send CTRL+C interrupt to a terminal session */
+  interruptTerminal: (sessionId: string) => void
   /** Subscribe to AI stream chunks — returns unsubscribe function */
   onAIStreamChunk: (handler: (data: { chatId: string; messageId: string; chunk: string; done?: boolean }) => void) => () => void
   /** Subscribe to AI merge results — returns unsubscribe function */
@@ -958,6 +962,27 @@ export function useCollaboration({
     socket.emit("container-reset")
   }, [])
 
+  const runProject = useCallback(
+    (sessionId: string) => {
+      const socket = socketRef.current
+      if (!socket) return
+      socket.emit("run-project", {
+        sessionId,
+        userId: currentUser.id,
+      })
+    },
+    [currentUser.id]
+  )
+
+  const interruptTerminal = useCallback(
+    (sessionId: string) => {
+      const socket = socketRef.current
+      if (!socket) return
+      socket.emit("terminal-interrupt", { sessionId })
+    },
+    []
+  )
+
   const onAIStreamChunk = useCallback(
     (handler: (data: { chatId: string; messageId: string; chunk: string; done?: boolean }) => void) => {
       const socket = socketRef.current
@@ -1015,6 +1040,8 @@ export function useCollaboration({
     getYjs,
     getYText,
     getAwareness,
+    runProject,
+    interruptTerminal,
     createFile,
     deleteFile,
     renameFile,

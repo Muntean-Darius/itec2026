@@ -20,7 +20,7 @@ import * as decoding from "lib0/decoding"
 import * as syncProtocol from "y-protocols/sync"
 import * as awarenessProtocol from "y-protocols/awareness"
 import { loadLatestSnapshot } from "./snapshot-store.js"
-import { streamAIChat, mergeWithAI } from "./ai.js"
+import { streamAIChat, mergeWithAI, detectRunCommand } from "./ai.js"
 import type { FileOperation, ChatMessage } from "./ai.js"
 import {
   ensureContainer,
@@ -28,6 +28,9 @@ import {
   destroyContainer,
   resetContainer,
   executeCommand,
+  executeStreamingCommand,
+  killRunningProcess,
+  isProcessRunning,
   getSessionCwd,
   onContainerStatus,
   onContainerStats,
@@ -544,6 +547,217 @@ export function setupCollaboration(io: SocketIOServer) {
 
       // Notify all clients that this terminal session is done + new cwd
       io.to(roomName).emit("terminal-busy", { sessionId: msg.sessionId, busy: false, cwd })
+    })
+
+    // ── Run Project (auto-detect command via LLM) ────────────────────────
+    socket.on("run-project", async (msg: { sessionId: string; userId: string }) => {
+      if (!currentRoom || !currentProjectId) return
+
+      const room = currentRoom
+      const projectId = currentProjectId
+      const roomName = `project:${projectId}`
+
+      const terminalsMap = room.doc.getMap("terminals")
+      const sessionMap = terminalsMap.get(msg.sessionId)
+      if (!sessionMap || !(sessionMap instanceof Y.Map)) return
+
+      const linesArr = sessionMap.get("lines")
+      if (!linesArr || !(linesArr instanceof Y.Array)) return
+
+      // Mark terminal as busy
+      io.to(roomName).emit("terminal-busy", { sessionId: msg.sessionId, busy: true })
+
+      // Gather file data for the LLM
+      const filesMap = room.doc.getMap("files")
+      const fileContents = new Map<string, string>()
+      const fileList: string[] = []
+      filesMap.forEach((value: unknown, key: string) => {
+        if (value && typeof (value as { toString(): string }).toString === "function") {
+          const normalizedKey = key.startsWith("/") ? key.slice(1) : key
+          fileContents.set(normalizedKey, (value as { toString(): string }).toString())
+          fileList.push(normalizedKey)
+        }
+      })
+
+      // Get previous run command from Yjs meta
+      const metaMap = room.doc.getMap("meta")
+      const previousRunCommand = metaMap.get("runCommand") as string | undefined
+
+      // Show detecting message
+      room.doc.transact(() => {
+        linesArr.push([{
+          id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          type: "stdout" as const,
+          content: "🔍 Detecting how to run this project...",
+          timestamp: new Date().toISOString(),
+        }])
+      }, "server")
+
+      try {
+        // Sync files to container first
+        await syncBeforeCommand(projectId)
+
+        // Use LLM to detect the run command
+        const result = await detectRunCommand({
+          files: fileContents,
+          fileList,
+          previousRunCommand,
+        })
+
+        // Save the detected command in Yjs meta for next time
+        room.doc.transact(() => {
+          metaMap.set("runCommand", result.command)
+        }, "server")
+
+        // Show what we detected
+        room.doc.transact(() => {
+          linesArr.push([{
+            id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            type: "stdout" as const,
+            content: `✅ ${result.explanation}\n${result.installCommand ? `📦 Installing: ${result.installCommand}\n` : ""}🚀 Running: ${result.command}`,
+            timestamp: new Date().toISOString(),
+          }])
+        }, "server")
+
+        // If there's an install command, run it first (blocking)
+        if (result.installCommand) {
+          const stdinLine = {
+            id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            type: "stdin" as const,
+            content: result.installCommand,
+            timestamp: new Date().toISOString(),
+            userId: msg.userId,
+            cwd: getSessionCwd(projectId, msg.sessionId),
+          }
+          room.doc.transact(() => { linesArr.push([stdinLine]) }, "server")
+
+          const installResult = await executeCommand(projectId, msg.sessionId, result.installCommand)
+          if (installResult.output) {
+            room.doc.transact(() => {
+              linesArr.push([{
+                id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                type: (installResult.exitCode !== null && installResult.exitCode !== 0) ? "stderr" as const : "stdout" as const,
+                content: installResult.output,
+                timestamp: new Date().toISOString(),
+              }])
+            }, "server")
+          }
+
+          // If install failed, stop
+          if (installResult.exitCode !== null && installResult.exitCode !== 0) {
+            io.to(roomName).emit("terminal-busy", { sessionId: msg.sessionId, busy: false, cwd: installResult.cwd })
+            return
+          }
+        }
+
+        // Show the run command as stdin
+        const runStdinLine = {
+          id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          type: "stdin" as const,
+          content: result.command,
+          timestamp: new Date().toISOString(),
+          userId: msg.userId,
+          cwd: getSessionCwd(projectId, msg.sessionId),
+        }
+        room.doc.transact(() => { linesArr.push([runStdinLine]) }, "server")
+
+        // Execute the run command with streaming output
+        let outputBuffer = ""
+        let lastFlush = Date.now()
+        const FLUSH_INTERVAL = 200 // ms — batch output for efficiency
+
+        const flushOutput = (type: "stdout" | "stderr") => {
+          if (!outputBuffer) return
+          const content = outputBuffer
+          outputBuffer = ""
+          lastFlush = Date.now()
+          room.doc.transact(() => {
+            linesArr.push([{
+              id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              type,
+              content,
+              timestamp: new Date().toISOString(),
+            }])
+          }, "server")
+        }
+
+        const flushInterval = setInterval(() => {
+          if (outputBuffer && Date.now() - lastFlush >= FLUSH_INTERVAL) {
+            flushOutput("stdout")
+          }
+        }, FLUSH_INTERVAL)
+
+        await new Promise<void>((resolve) => {
+          executeStreamingCommand(
+            projectId,
+            msg.sessionId,
+            result.command,
+            (data, type) => {
+              outputBuffer += data
+              // Flush immediately for stderr or if buffer is large
+              if (type === "stderr" || outputBuffer.length > 4096) {
+                flushOutput(type)
+              }
+            },
+            (exitCode) => {
+              clearInterval(flushInterval)
+              // Flush remaining output
+              if (outputBuffer) flushOutput(exitCode !== 0 ? "stderr" : "stdout")
+
+              // Sync files after process ends
+              syncAfterCommand(projectId).catch(() => {})
+
+              const cwd = getSessionCwd(projectId, msg.sessionId)
+              io.to(roomName).emit("terminal-busy", { sessionId: msg.sessionId, busy: false, cwd })
+              resolve()
+            },
+          )
+        })
+      } catch (err) {
+        room.doc.transact(() => {
+          linesArr.push([{
+            id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            type: "stderr" as const,
+            content: `❌ Failed to detect run command: ${(err as Error).message}`,
+            timestamp: new Date().toISOString(),
+          }])
+        }, "server")
+        io.to(roomName).emit("terminal-busy", { sessionId: msg.sessionId, busy: false, cwd: getSessionCwd(projectId, msg.sessionId) })
+      }
+    })
+
+    // ── Terminal Interrupt (CTRL+C) ──────────────────────────────────────
+    socket.on("terminal-interrupt", async (msg: { sessionId: string }) => {
+      if (!currentRoom || !currentProjectId) return
+
+      const projectId = currentProjectId
+      const roomName = `project:${projectId}`
+
+      const killed = await killRunningProcess(projectId, msg.sessionId)
+      if (killed) {
+        const room = currentRoom
+        const terminalsMap = room.doc.getMap("terminals")
+        const sessionMap = terminalsMap.get(msg.sessionId)
+        if (sessionMap instanceof Y.Map) {
+          const linesArr = sessionMap.get("lines")
+          if (linesArr instanceof Y.Array) {
+            room.doc.transact(() => {
+              linesArr.push([{
+                id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                type: "stderr" as const,
+                content: "^C",
+                timestamp: new Date().toISOString(),
+              }])
+            }, "server")
+          }
+        }
+
+        // Sync files after interrupt
+        await syncAfterCommand(projectId)
+
+        const cwd = getSessionCwd(projectId, msg.sessionId)
+        io.to(roomName).emit("terminal-busy", { sessionId: msg.sessionId, busy: false, cwd })
+      }
     })
 
     // ── Container Reset ──────────────────────────────────────────────────
