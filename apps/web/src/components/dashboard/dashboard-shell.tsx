@@ -466,7 +466,7 @@ export function DashboardShell({ user, projects }: DashboardShellProps) {
                 placeholder="Search workspaces..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="pl-9"
+                className="pl-9 bg-elevated/50 shadow-inner border-border-default hover:border-border-strong focus-visible:border-brand transition-colors"
               />
             </div>
             <Button onClick={() => setShowNewProject(true)}>
@@ -893,6 +893,38 @@ export function DashboardShell({ user, projects }: DashboardShellProps) {
   )
 }
 
+function ProjectLanguageIcon({ language, className = "" }: { language: string, className?: string }) {
+  const lang = language.toLowerCase()
+  if (lang.includes("python")) {
+    return (
+      <svg className={className} viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M63.79 3.016C47.88 3.016 45.47 9.873 45.47 9.873L45.28 20.316h38.25v2.808H35.88c-17.78 0-20.61 12.448-20.61 27.67s1.95 28.532 20.61 28.532h9.72V73.49s0-11.45 11.66-11.45h30.13c11.08 0 11.27-11.07 11.27-11.07V22.257c0-15.545-16.14-19.24-34.87-19.24zm-14.77 11.27a4.67 4.67 0 1 1-9.34 0 4.67 4.67 0 0 1 9.34 0zm71.07 33.34c0 15.546 16.14 19.24 34.87 19.24 15.91 0 18.32-6.857 18.32-6.857l.19-10.443H135.22v-2.809h47.65c17.78 0 20.61-12.449 20.61-27.67s-1.95-28.533-20.61-28.533h-9.72V67.09s0 11.45-11.66 11.45H131.36c-11.08 0-11.27 11.07-11.27 11.07v28.71z" fill="url(#paint0_linear_python)" transform="translate(-17 -3) scale(0.8)"/>
+        <path d="M120.09 113.6c0 15.546 16.14 19.24 34.87 19.24 15.91 0 18.32-6.857 18.32-6.857l.19-10.443H135.22v-2.809h47.65c17.78 0 20.61-12.449 20.61-27.67s-1.95-28.533-20.61-28.533h-9.72V67.09s0 11.45-11.66 11.45H131.36c-11.08 0-11.27 11.07-11.27 11.07v28.71zm59.27-14.885a4.67 4.67 0 1 1 9.34 0 4.67 4.67 0 0 1-9.34 0z" fill="url(#paint1_linear_python)" transform="translate(-87 -53) scale(0.8)"/>
+        <defs>
+          <linearGradient id="paint0_linear_python" x1="28.98" y1="21.56" x2="89.17" y2="76.69" gradientUnits="userSpaceOnUse">
+            <stop stopColor="#387EB8"/>
+            <stop offset="1" stopColor="#366994"/>
+          </linearGradient>
+          <linearGradient id="paint1_linear_python" x1="172.93" y1="120.94" x2="114.77" y2="61.58" gradientUnits="userSpaceOnUse">
+            <stop stopColor="#FFE052"/>
+            <stop offset="1" stopColor="#FFC331"/>
+          </linearGradient>
+        </defs>
+      </svg>
+    )
+  }
+  if (lang.includes("typescript") || lang.includes("react")) {
+    return (
+      <svg className={className} viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+         <path d="M10.875 10.875H117.125V117.125H10.875V10.875Z" fill="#3178C6"/>
+         <path d="M57.942 66.866H67.433V106H79.626V66.866H89.102V56.634H57.942V66.866ZM29.23 88.026C29.23 93.303 30.597 97.436 33.327 100.419C36.059 103.398 39.99 104.887 45.12 104.887C52.793 104.887 58.077 100.468 60.978 91.642L50.485 87.279C49.333 91.565 47.669 93.71 45.485 93.71C43.518 93.71 42.138 92.748 41.353 90.816C40.665 88.887 40.324 85.992 40.324 82.138V56.636H29.231V88.028H29.23Z" fill="white"/>
+      </svg>
+    )
+  }
+  // Default fallback icon
+  return <Code2 className={className} />
+}
+
 function ProjectCard({
   project,
   onSettings,
@@ -908,11 +940,11 @@ function ProjectCard({
     <motion.div variants={itemVariants}>
       <Link
         href={`/workspace/${project.id}`}
-        className="group flex h-full flex-col rounded-xl border border-border-subtle bg-surface p-5 transition-all duration-200 hover:border-brand-muted-border hover:shadow-lg hover:shadow-brand-glow"
+        className="group flex h-full flex-col rounded-xl border border-border-subtle bg-surface p-5 pb-6 transition-all duration-200 hover:-translate-y-1 hover:border-brand-muted-border hover:shadow-lg hover:shadow-brand-glow"
       >
         <div className="flex items-start justify-between">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-muted">
-            <Code2 className="h-5 w-5 text-brand" />
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-surface relative overflow-hidden border border-border-subtle shadow-sm">
+            <ProjectLanguageIcon language={project.language} className="h-6 w-6 text-brand" />
           </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

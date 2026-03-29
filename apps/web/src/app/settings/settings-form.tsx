@@ -46,7 +46,7 @@ export function SettingsForm({ initialName, initialEmail }: SettingsFormProps) {
         <div className="mx-auto max-w-lg px-6 py-10">
           <Link
             href="/dashboard"
-            className="inline-flex items-center gap-1.5 text-sm text-text-secondary hover:text-text-primary transition-colors mb-6"
+            className="inline-flex items-center gap-1.5 text-sm text-text-secondary hover:text-brand transition-colors mb-6 font-medium"
           >
             <ArrowLeft className="h-4 w-4" />
             Back to dashboard
@@ -68,7 +68,7 @@ export function SettingsForm({ initialName, initialEmail }: SettingsFormProps) {
           <Separator className="my-6" />
 
           <form action={formAction} className="space-y-6">
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label
                 htmlFor="name"
                 className="text-sm font-medium text-text-secondary"
@@ -85,10 +85,11 @@ export function SettingsForm({ initialName, initialEmail }: SettingsFormProps) {
                 minLength={1}
                 maxLength={100}
                 autoComplete="name"
+                className="bg-elevated/50 border-border-default hover:border-brand focus-visible:ring-brand/50 transition-colors"
               />
             </div>
 
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label
                 htmlFor="email"
                 className="text-sm font-medium text-text-secondary"
@@ -104,8 +105,9 @@ export function SettingsForm({ initialName, initialEmail }: SettingsFormProps) {
                 placeholder="you@example.com"
                 required
                 autoComplete="email"
+                className="bg-elevated/50 border-border-default hover:border-brand focus-visible:ring-brand/50 transition-colors mb-1"
               />
-              <p className="text-xs text-text-tertiary">
+              <p className="text-[11px] text-text-tertiary">
                 Changing your email will send a confirmation to the new address.
               </p>
             </div>

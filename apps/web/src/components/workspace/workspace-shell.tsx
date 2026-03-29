@@ -7,6 +7,8 @@ import {
   PanelLeftOpen,
   PanelBottomClose,
   PanelBottomOpen,
+  PanelRightClose,
+  PanelRightOpen,
   Play,
   Square,
   Share2,
@@ -22,6 +24,7 @@ import {
   FolderTree,
   Search,
   FolderGit2,
+  AlertTriangle,
 } from "lucide-react"
 import Link from "next/link"
 import type { User, Project, FileNode, PresenceUser, AIAgent, Snapshot } from "@/data/types"
@@ -1227,6 +1230,26 @@ export function WorkspaceShell({
                 {terminalOpen ? "Hide terminal" : "Show terminal"}
               </TooltipContent>
             </Tooltip>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={() => setAgentRosterOpen(!agentRosterOpen)}
+                >
+                  {agentRosterOpen ? (
+                    <PanelRightClose className="h-4 w-4" />
+                  ) : (
+                    <PanelRightOpen className="h-4 w-4" />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {agentRosterOpen ? "Hide AI Assistant" : "Show AI Assistant"}
+              </TooltipContent>
+            </Tooltip>
           </div>
 
           {/* Editor */}
@@ -1505,9 +1528,9 @@ export function WorkspaceShell({
           {collab.dockerStatus === "error" && (
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className="flex cursor-help items-center gap-1">
-                  <span className="inline-flex h-1.5 w-1.5 rounded-full bg-error" />
-                  <span className="text-error">Docker error</span>
+                <span className="flex cursor-help items-center gap-1 text-error font-medium">
+                  <AlertTriangle className="h-3 w-3" />
+                  <span>Docker error</span>
                 </span>
               </TooltipTrigger>
               <TooltipContent>{collab.dockerError || "Unknown error"}</TooltipContent>
