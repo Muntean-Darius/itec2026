@@ -262,7 +262,9 @@ export async function getProjectFiles(projectId: string): Promise<FileNode[]> {
   if (!fileStates) return []
 
   const entries = Object.entries(fileStates)
-  return entries.map(([path, content]) => {
+  return entries.map(([rawPath, content]) => {
+    // Normalize path: ensure leading "/" to match UI convention
+    const path = rawPath.startsWith("/") ? rawPath : "/" + rawPath
     const ext = path.split(".").pop()?.toLowerCase() ?? ""
     const language =
       ext === "ts" || ext === "tsx"

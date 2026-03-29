@@ -143,17 +143,31 @@ export function WorkspaceShell({
   const resolveSnapshotFileStates = useCallback(
     (snapshot: Snapshot | null): Record<string, string> | null => {
       if (!snapshot) return null
-      if (snapshot.fileStates) return snapshot.fileStates
 
-      const idx = timelineSnapshots.findIndex((s) => s.id === snapshot.id)
-      if (idx === -1) return null
-
-      for (let i = idx - 1; i >= 0; i--) {
-        if (timelineSnapshots[i].fileStates) {
-          return timelineSnapshots[i].fileStates ?? null
+      // Find raw fileStates from the snapshot or walk back through timeline
+      let raw = snapshot.fileStates
+      if (!raw) {
+        const idx = timelineSnapshots.findIndex((s) => s.id === snapshot.id)
+        if (idx === -1) return null
+        for (let i = idx - 1; i >= 0; i--) {
+          if (timelineSnapshots[i].fileStates) {
+            raw = timelineSnapshots[i].fileStates
+            break
+          }
         }
       }
-      return null
+      if (!raw) return null
+
+      // Normalize all keys to have a leading "/" so they match the convention
+      // used by syncFilesFromDoc, buildTree, and the rest of the UI.
+      // Server cron snapshots store keys WITHOUT "/" (raw Yjs map keys),
+      // while client snapshots store keys WITH "/".
+      const normalized: Record<string, string> = {}
+      for (const [path, content] of Object.entries(raw)) {
+        const key = path.startsWith("/") ? path : "/" + path
+        normalized[key] = content
+      }
+      return normalized
     },
     [timelineSnapshots]
   )
@@ -312,9 +326,11 @@ export function WorkspaceShell({
 
   const handleOpenFile = useCallback(
     (path: string) => {
-      setActiveFilePath(path)
-      setOpenFiles((prev) => (prev.includes(path) ? prev : [...prev, path]))
-      collab.updateAwareness({ activeFile: path })
+      // Normalize: ensure leading "/" to match UI convention
+      const normalized = path.startsWith("/") ? path : "/" + path
+      setActiveFilePath(normalized)
+      setOpenFiles((prev) => (prev.includes(normalized) ? prev : [...prev, normalized]))
+      collab.updateAwareness({ activeFile: normalized })
     },
     [collab]
   )
