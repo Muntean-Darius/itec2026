@@ -353,10 +353,12 @@ export function useCollaboration({
       if (initialFiles.length > 0) {
         doc.transact(() => {
           for (const file of initialFiles) {
-            if (!filesMap.has(file.path)) {
+            // Normalize: strip leading slash to match createFile convention
+            const normalizedPath = file.path.startsWith("/") ? file.path.slice(1) : file.path
+            if (!filesMap.has(normalizedPath) && !filesMap.has("/" + normalizedPath)) {
               const ytext = new Y.Text()
               ytext.insert(0, file.content)
-              filesMap.set(file.path, ytext)
+              filesMap.set(normalizedPath, ytext)
             }
           }
         })
@@ -690,15 +692,16 @@ export function useCollaboration({
     const doc = ydocRef.current
     if (!Y || !doc) return
     const filesMap = doc.getMap("files")
-    let ytext = filesMap.get(path)
+    // Normalize: strip leading slash to match createFile convention
+    const normalizedPath = path.startsWith("/") ? path.slice(1) : path
+    let ytext = filesMap.get(normalizedPath)
     if (!(ytext instanceof Y.Text)) {
-      // Try alternate path (with/without leading slash)
-      const alt = path.startsWith("/") ? path.slice(1) : "/" + path
-      ytext = filesMap.get(alt)
+      // Try alternate path (with leading slash)
+      ytext = filesMap.get("/" + normalizedPath)
     }
     if (!(ytext instanceof Y.Text)) {
       ytext = new Y.Text()
-      filesMap.set(path, ytext)
+      filesMap.set(normalizedPath, ytext)
     }
     const current = ytext.toString()
     if (current === newContent) return

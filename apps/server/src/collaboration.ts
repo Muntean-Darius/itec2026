@@ -134,19 +134,55 @@ function getOrCreateRoom(projectId: string, io?: SocketIOServer): ProjectRoom {
 /**
  * Load the latest snapshot from DB into the room's Yjs doc.
  * Called once when the first user joins a room.
+ *
+ * Handles two blob formats:
+ * - Server cron snapshots: blob is a real Yjs state vector (Y.encodeStateAsUpdate)
+ * - Client snapshots: blob is JSON.stringify(fileStates) — NOT a valid Yjs update
+ *
+ * When the blob is invalid, falls back to reconstructing the doc from fileStates.
  */
 const loadedRooms = new Set<string>()
 async function ensureSnapshotLoaded(projectId: string, room: ProjectRoom) {
   if (loadedRooms.has(projectId)) return
   loadedRooms.add(projectId)
   try {
-    const snapshot = await loadLatestSnapshot(projectId)
-    if (snapshot && snapshot.byteLength > 0) {
-      Y.applyUpdate(room.doc, snapshot)
-      console.log(`[iTECify] Loaded snapshot for ${projectId} (${snapshot.byteLength} bytes)`)
-    } else {
+    const result = await loadLatestSnapshot(projectId)
+    if (!result) {
       console.log(`[iTECify] No snapshot found for ${projectId} — starting fresh`)
+      return
     }
+
+    const { blob, fileStates } = result
+
+    // Try applying the blob as a Yjs state update
+    if (blob.byteLength > 0) {
+      try {
+        Y.applyUpdate(room.doc, blob)
+        console.log(`[iTECify] Loaded snapshot for ${projectId} (${blob.byteLength} bytes)`)
+        return
+      } catch (err) {
+        console.warn(`[iTECify] Yjs blob invalid for ${projectId}, falling back to fileStates:`, (err as Error).message)
+      }
+    }
+
+    // Fallback: reconstruct the doc from fileStates (handles client-created snapshots
+    // where the blob is JSON text instead of a Yjs binary update)
+    if (fileStates && typeof fileStates === "object") {
+      const filesMap = room.doc.getMap("files")
+      room.doc.transact(() => {
+        for (const [path, content] of Object.entries(fileStates)) {
+          if (typeof content === "string") {
+            const ytext = new Y.Text()
+            ytext.insert(0, content)
+            filesMap.set(path, ytext)
+          }
+        }
+      }, "server")
+      console.log(`[iTECify] Reconstructed ${Object.keys(fileStates).length} files from fileStates for ${projectId}`)
+      return
+    }
+
+    console.log(`[iTECify] No usable snapshot data for ${projectId} — starting fresh`)
   } catch (err) {
     console.error(`[iTECify] Failed to load snapshot for ${projectId}:`, err)
   }
@@ -155,7 +191,7 @@ async function ensureSnapshotLoaded(projectId: string, room: ProjectRoom) {
 // ─── Snapshot Saving ─────────────────────────────────────────────────────
 
 interface SnapshotStore {
-  save: (projectId: string, blob: Uint8Array, userId: string) => Promise<void>
+  save: (projectId: string, blob: Uint8Array, userId: string, options?: { fileStates?: Record<string, string> }) => Promise<void>
 }
 
 let snapshotStore: SnapshotStore | null = null
@@ -173,9 +209,19 @@ async function saveSnapshot(projectId: string, room: ProjectRoom) {
   try {
     const blob = Y.encodeStateAsUpdate(room.doc)
     const userId = room.users.values().next().value?.userId ?? "system"
-    await snapshotStore.save(projectId, blob, userId)
+
+    // Extract file states from the Yjs doc for time-travel preview
+    const filesMap = room.doc.getMap("files")
+    const fileStates: Record<string, string> = {}
+    filesMap.forEach((value: unknown, key: string) => {
+      if (value && typeof (value as { toString(): string }).toString === "function") {
+        fileStates[key] = (value as { toString(): string }).toString()
+      }
+    })
+
+    await snapshotStore.save(projectId, blob, userId, { fileStates })
     room.lastSnapshotAt = Date.now()
-    console.log(`[iTECify] Snapshot saved for ${projectId} (${blob.byteLength} bytes)`)
+    console.log(`[iTECify] Snapshot saved for ${projectId} (${blob.byteLength} bytes, ${Object.keys(fileStates).length} files)`)
   } catch (err) {
     console.error(`[iTECify] Snapshot save failed for ${projectId}:`, err)
   }
