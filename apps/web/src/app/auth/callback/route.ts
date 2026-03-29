@@ -15,10 +15,11 @@ export async function GET(request: Request) {
   }
 
   if (code) {
-    const supabase = await createClient()
+    const response = NextResponse.redirect(`${origin}/`)
+    const supabase = await createClient(response)
     const { error } = await supabase.auth.exchangeCodeForSession(code)
     if (!error) {
-      return NextResponse.redirect(`${origin}/`)
+      return response
     }
     console.error("[auth/callback] Code exchange failed:", error.message)
     const msg = encodeURIComponent(error.message)
