@@ -20,6 +20,7 @@ import {
   Trash2,
   ClipboardCopy,
   FolderTree,
+  Search,
   FolderGit2,
 } from "lucide-react"
 import Link from "next/link"
@@ -42,6 +43,7 @@ import { AgentRoster } from "./agent-roster"
 import { AIInlinePrompt } from "./ai-inline-prompt"
 import { AIPanel } from "./ai-panel"
 import { SourceControlPanel } from "./source-control-panel"
+import { SearchPanel } from "./search-panel"
 import { BranchSelector } from "./branch-selector"
 import { SyncIndicator } from "./sync-indicator"
 import { DiffViewer } from "./diff-viewer"
@@ -111,7 +113,7 @@ export function WorkspaceShell({
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [terminalOpen, setTerminalOpen] = useState(true)
   const [agentRosterOpen, setAgentRosterOpen] = useState(false)
-  const [sidebarTab, setSidebarTab] = useState<"files" | "git">("files")
+  const [sidebarTab, setSidebarTab] = useState<"files" | "search" | "git">("files")
   const [diffViewPath, setDiffViewPath] = useState<string | null>(null)
 
   // Panel sizes (resizable)
@@ -802,7 +804,7 @@ export function WorkspaceShell({
               {/* Sidebar Tabs */}
               <Tabs
                 value={sidebarTab}
-                onValueChange={(v) => setSidebarTab(v as "files" | "git")}
+                onValueChange={(v) => setSidebarTab(v as "files" | "search" | "git")}
                 className="flex flex-col h-full"
               >
                 <TabsList className="h-9 shrink-0 rounded-none border-b border-border-subtle bg-transparent p-0 justify-start">
@@ -812,6 +814,13 @@ export function WorkspaceShell({
                   >
                     <FolderTree className="h-3.5 w-3.5 mr-1.5" />
                     Files
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="search"
+                    className="h-full rounded-none border-b-2 border-transparent data-[state=active]:border-brand data-[state=active]:bg-transparent px-3 text-xs"
+                  >
+                    <Search className="h-3.5 w-3.5 mr-1.5" />
+                    Search
                   </TabsTrigger>
                   <TabsTrigger
                     value="git"
@@ -832,6 +841,19 @@ export function WorkspaceShell({
                     onRenameFile={(oldPath, newPath) => collab.renameFile(oldPath, newPath)}
                     onCreateFile={handleCreateFile}
                     createFileTrigger={createFileTrigger}
+                  />
+                </TabsContent>
+
+                <TabsContent value="search" className="flex-1 overflow-hidden m-0">
+                  <SearchPanel
+                    files={files}
+                    onOpenFile={handleOpenFile}
+                    onReplaceInFile={(path, search, replacement) => {
+                      const file = files.find((f) => f.path === path)
+                      if (!file) return
+                      const updated = file.content.replace(search, replacement)
+                      collab.updateFileContent(path, updated)
+                    }}
                   />
                 </TabsContent>
 
